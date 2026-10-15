@@ -1,6 +1,6 @@
 ---
 name: "methodology-blueprint-delivered"
-description: "Blueprint Delivered methodology overview -- Load when a user is interested in learning more about what to do before or after they create a Blueprint. This will help with general application building questions such as - What are the steps to building a Pega Application"
+description: Blueprint Delivered methodology overview -- Load when a user is interested in learning more about what to do before or after they create a Blueprint. This will help with general application building questions such as - What are the steps to building a Pega Application
 ---
 
 ## What Is Blueprint Delivered?

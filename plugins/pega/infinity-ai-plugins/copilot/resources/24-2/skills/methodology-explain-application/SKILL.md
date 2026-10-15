@@ -1,6 +1,6 @@
 ---
 name: methodology-explain-application
-description: "Load when answering questions about the current Pega application -- app stats, workflows, case types, data objects. Uses get-application as the primary source before any rule-level exploration."
+description: Load when answering questions about the current Pega application -- app stats, workflows, case types, data objects. Uses get-application as the primary source before any rule-level exploration.
 ---
 
 Use `get-application` as the **single primary source** for application understanding questions.

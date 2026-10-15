@@ -1,6 +1,6 @@
 ---
 name: methodology-assignment-authoring
-description: "Load when creating or modifying Assignment steps in a Pega flow. Covers new step creation (FlowAction + View) and form field changes. References rule-type skills for examples and patterns."
+description: Load when creating or modifying Assignment steps in a Pega flow. Covers new step creation (FlowAction + View) and form field changes. References rule-type skills for examples and patterns.
 ---
 
 Orchestration guide for creating new Assignment steps or modifying fields on existing

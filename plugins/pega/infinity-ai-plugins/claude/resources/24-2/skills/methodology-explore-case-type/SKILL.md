@@ -1,6 +1,6 @@
 ---
 name: methodology-explore-case-type
-description: "Load when exploring a case type to find what needs work. Drills down incrementally through lifecycle levels (case type → flows → assignments → properties → SLAs) and stops at the first actionable issue."
+description: Load when exploring a case type to find what needs work. Drills down incrementally through lifecycle levels (case type → flows → assignments → properties → SLAs) and stops at the first actionable issue.
 ---
 
 Explore a case type **incrementally** — fetch one level at a time, check for issues,

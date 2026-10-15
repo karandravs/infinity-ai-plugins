@@ -1,6 +1,6 @@
 ---
 name: methodology-rule-review
-description: "Load when the user asks to review, inspect, check, examine, analyze, assess, evaluate, audit, or look at existing rules (single-rule or branch-level). For branch review requests, first enumerate rules in the branch, present them to the user, then review selected rules one-by-one. Supports branch-vs-base comparison by fetching the branch rule and its non-branch base rule and returning a structured change report. Resolves rule pzInsKey values, fetches review warnings and guidelines via D_pxRuleReview using run-data-page, consolidates pxWarningsToDisplay, and optionally applies approved changes through the normal rule authoring workflow. Must be loaded before any rule review or inspection call."
+description: Load when the user asks to review, inspect, check, examine, analyze, assess, evaluate, audit, or look at existing rules (single-rule or branch-level). For branch review requests, first enumerate rules in the branch, present them to the user, then review selected rules one-by-one. Supports branch-vs-base comparison by fetching the branch rule and its non-branch base rule and returning a structured change report. Resolves rule pzInsKey values, fetches review warnings and guidelines via D_pxRuleReview using run-data-page, consolidates pxWarningsToDisplay, and optionally applies approved changes through the normal rule authoring workflow. Must be loaded before any rule review or inspection call.
 ---
 
 # Recipe: Review a Rule and Apply Approved Improvements

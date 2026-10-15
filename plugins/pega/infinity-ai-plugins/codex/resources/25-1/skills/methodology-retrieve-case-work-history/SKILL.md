@@ -1,6 +1,6 @@
 ---
 name: methodology-retrieve-case-work-history
-description: "Load when the user asks about case history, timeline, past actions, or audit trail for a specific case. Contains step-by-step instructions for calling D_pyWorkHistory and presenting results."
+description: Load when the user asks about case history, timeline, past actions, or audit trail for a specific case. Contains step-by-step instructions for calling D_pyWorkHistory and presenting results.
 ---
 # Recipe: Retrieve Case Work History
 

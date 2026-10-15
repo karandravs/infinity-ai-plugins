@@ -1,6 +1,6 @@
 ---
 name: methodology-generate-tests
-description: "Load when the user asks to generate tests for an existing rule or case behavior. Produces a risk-based test plan, discovers existing linked PegaUnit tests first, then creates or updates PegaUnit or Application Test artifacts through branch-scoped authoring after explicit user confirmation."
+description: Load when the user asks to generate tests for an existing rule or case behavior. Produces a risk-based test plan, discovers existing linked PegaUnit tests first, then creates or updates PegaUnit or Application Test artifacts through branch-scoped authoring after explicit user confirmation.
 ---
 
 # Recipe: Generate Tests for a Rule or Case Behavior

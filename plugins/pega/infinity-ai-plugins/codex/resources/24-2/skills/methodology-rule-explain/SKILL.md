@@ -1,6 +1,6 @@
 ---
 name: methodology-rule-explain
-description: "Load when the user asks to explain what an existing rule instance of any rule type does. Resolves one exact rule target and returns a focused, functionality-only explanation. Use /explain for a concise summary or /explain indetails for a deep walkthrough. This skill is read-only and must never perform rule authoring actions."
+description: Load when the user asks to explain what an existing rule instance of any rule type does. Resolves one exact rule target and returns a focused, functionality-only explanation. Use /explain for a concise summary or /explain indetails for a deep walkthrough. This skill is read-only and must never perform rule authoring actions.
 ---
 
 # Recipe: Explain an Existing Rule
