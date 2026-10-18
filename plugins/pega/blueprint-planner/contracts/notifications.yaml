@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info:
+  title: Notifications API
+  version: 1.0.0
+  description: >-
+    Notification system of record for the Dispute Resolution Hub. Email dispatch with
+    template-driven payloads per disposition.
+servers:
+  - url: https://notifications.example.com/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /notifications/email:
+    post:
+      summary: Send a customer notification email
+      operationId: sendEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailRequest'
+            examples:
+              approved:
+                summary: Disposition of Approved
+                value:
+                  to: anna.devries@example.com
+                  template_id: dispute_resolution_approved
+                  language: en
+                  parameters:
+                    dispute_id: DSP-2026-000014
+                    merchant_name: Nordic Electronics BV
+                    refund_amount: '480.00'
+                    currency: EUR
+                    expected_settlement_date: '2026-10-13'
+              more_information:
+                summary: More Information Required
+                value:
+                  to: anna.devries@example.com
+                  template_id: dispute_more_information
+                  language: en
+                  parameters:
+                    dispute_id: DSP-2026-000017
+                    missing_documents: [receipt, delivery_confirmation]
+                    deadline: '2026-10-21'
+      responses:
+        '202':
+          description: Email queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+              example:
+                notification_id: NTF-2026-55410
+                status: queued
+        '429':
+          description: Rate limited - back off and retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: RATE_LIMITED
+                message: Notification service rate limit exceeded.
+        '503':
+          description: Service unavailable (transient - retryable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: NOTIFY_UNAVAILABLE
+                message: Notification service is temporarily unavailable.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+    EmailRequest:
+      type: object
+      required: [to, template_id, language, parameters]
+      properties:
+        to: { type: string, format: email, example: anna.devries@example.com }
+        template_id:
+          type: string
+          enum:
+            - dispute_resolution_approved
+            - dispute_resolution_partially_approved
+            - dispute_resolution_rejected
+            - dispute_more_information
+          example: dispute_resolution_approved
+        language: { type: string, example: en }
+        parameters:
+          type: object
+          additionalProperties: true
+          example:
+            dispute_id: DSP-2026-000014
+            merchant_name: Nordic Electronics BV
+            refund_amount: '480.00'
+            currency: EUR
+            expected_settlement_date: '2026-10-13'
+    NotificationResponse:
+      type: object
+      required: [notification_id, status]
+      properties:
+        notification_id: { type: string, example: NTF-2026-55410 }
+        status: { type: string, enum: [queued, sent, failed], example: queued }

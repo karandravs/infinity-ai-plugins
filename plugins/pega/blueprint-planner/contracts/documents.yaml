@@ -1,0 +1,112 @@
+openapi: 3.1.0
+info:
+  title: Document AI API
+  version: 1.0.0
+  description: >-
+    Document AI system of record for the Dispute Resolution Hub. Extracts structured
+    facts from uploaded evidence (receipts, invoices, delivery confirmations).
+servers:
+  - url: https://documents.example.com/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /documents/extract:
+    post:
+      summary: Extract structured fields from an evidence document
+      operationId: extractDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentExtractRequest'
+            example:
+              dispute_id: DSP-2026-000014
+              document_id: DOC-99231
+              document_type: receipt
+              content_type: application/pdf
+      responses:
+        '200':
+          description: Document extracted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentExtractResponse'
+              example:
+                document_id: DOC-99231
+                document_type: receipt
+                extracted_fields:
+                  merchant_name: Nordic Electronics BV
+                  transaction_date: '2026-09-28'
+                  amount: 480.00
+                  currency: EUR
+                  transaction_id: TXN-88421
+                confidence: 0.94
+                issues: []
+        '422':
+          description: Unsupported document type or unreadable content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: UNREADABLE_DOCUMENT
+                message: Could not read the supplied document.
+        '503':
+          description: Service unavailable (transient - retryable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: DOCAI_UNAVAILABLE
+                message: Document AI service is temporarily unavailable.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+    DocumentExtractRequest:
+      type: object
+      required: [dispute_id, document_id, document_type, content_type]
+      properties:
+        dispute_id: { type: string, example: DSP-2026-000014 }
+        document_id: { type: string, example: DOC-99231 }
+        document_type:
+          type: string
+          enum: [receipt, invoice, delivery_confirmation, other]
+          example: receipt
+        content_type:
+          type: string
+          enum: [application/pdf, image/png, image/jpeg]
+          example: application/pdf
+    DocumentExtractResponse:
+      type: object
+      required: [document_id, document_type, extracted_fields, confidence]
+      properties:
+        document_id: { type: string, example: DOC-99231 }
+        document_type:
+          type: string
+          enum: [receipt, invoice, delivery_confirmation, other]
+          example: receipt
+        extracted_fields:
+          type: object
+          additionalProperties: true
+          example:
+            merchant_name: Nordic Electronics BV
+            transaction_date: '2026-09-28'
+            amount: 480.00
+            currency: EUR
+            transaction_id: TXN-88421
+        confidence: { type: number, format: float, minimum: 0, maximum: 1, example: 0.94 }
+        issues:
+          type: array
+          items: { type: string }
+          example: []

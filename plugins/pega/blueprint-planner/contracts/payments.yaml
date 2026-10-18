@@ -1,0 +1,295 @@
+openapi: 3.1.0
+info:
+  title: Payments API
+  version: 1.0.0
+  description: >-
+    Payments system of record for the Dispute Resolution Hub. Transaction lookup,
+    refund submission (idempotent), and dispute status updates.
+servers:
+  - url: https://payments.example.com/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /transactions/{transaction_id}:
+    get:
+      summary: Fetch transaction details
+      operationId: getTransaction
+      parameters:
+        - name: transaction_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: TXN-88421
+      responses:
+        '200':
+          description: Transaction found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+              examples:
+                auto_approve:
+                  summary: Scenario A - EUR 480 goods not received
+                  value:
+                    transaction_id: TXN-88421
+                    customer_id: CUST-1042
+                    merchant_name: Nordic Electronics BV
+                    merchant_category: electronics
+                    amount: 480.00
+                    currency: EUR
+                    transaction_date: '2026-09-28'
+                    status: settled
+                    payment_method: credit_card
+                    refund_status: none
+                    dispute_status: none
+                high_value:
+                  summary: Scenario B - EUR 4800 cancelled but charged
+                  value:
+                    transaction_id: TXN-99310
+                    customer_id: CUST-1042
+                    merchant_name: Nordic Electronics BV
+                    merchant_category: electronics
+                    amount: 4800.00
+                    currency: EUR
+                    transaction_date: '2026-09-02'
+                    status: settled
+                    payment_method: credit_card
+                    refund_status: none
+                    dispute_status: none
+                high_risk:
+                  summary: Scenario C - EUR 1250 unauthorized
+                  value:
+                    transaction_id: TXN-77120
+                    customer_id: CUST-1128
+                    merchant_name: Online Marketplace GmbH
+                    merchant_category: marketplaces
+                    amount: 1250.00
+                    currency: EUR
+                    transaction_date: '2026-10-01'
+                    status: settled
+                    payment_method: credit_card
+                    refund_status: none
+                    dispute_status: none
+                missing_evidence:
+                  summary: Scenario D - EUR 180 damaged goods
+                  value:
+                    transaction_id: TXN-66001
+                    customer_id: CUST-1033
+                    merchant_name: Home & Garden NL
+                    merchant_category: retail
+                    amount: 180.00
+                    currency: EUR
+                    transaction_date: '2026-09-20'
+                    status: settled
+                    payment_method: debit_card
+                    refund_status: none
+                    dispute_status: none
+        '404':
+          description: Transaction not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: TRANSACTION_NOT_FOUND
+                message: No transaction found for the supplied transaction ID.
+  /refunds:
+    post:
+      summary: Submit a refund instruction
+      description: >-
+        Idempotent - Pega passes dispute_id as idempotency_key. Retried up to 3x with
+        exponential backoff on 503.
+      operationId: submitRefund
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+            examples:
+              approved_480:
+                summary: Scenario A - full refund
+                value:
+                  dispute_id: DSP-2026-000014
+                  transaction_id: TXN-88421
+                  customer_id: CUST-1042
+                  refund_amount: 480.00
+                  currency: EUR
+                  disposition: Approved
+                  idempotency_key: DSP-2026-000014
+                  approved_by: dispute.analyst@pegatest.example
+                  approval_timestamp: '2026-10-10T09:42:00Z'
+              approved_4800:
+                summary: Scenario B - finance-approved refund
+                value:
+                  dispute_id: DSP-2026-000015
+                  transaction_id: TXN-99310
+                  customer_id: CUST-1042
+                  refund_amount: 4800.00
+                  currency: EUR
+                  disposition: Approved
+                  idempotency_key: DSP-2026-000015
+                  approved_by: finance.approver@pegatest.example
+                  approval_timestamp: '2026-10-10T11:05:00Z'
+      responses:
+        '201':
+          description: Refund instruction accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+              example:
+                refund_reference: REF-2026-009821
+                dispute_id: DSP-2026-000014
+                transaction_id: TXN-88421
+                refund_amount: 480.00
+                currency: EUR
+                status: processing
+                expected_settlement_date: '2026-10-13'
+        '409':
+          description: Idempotency conflict (dispute already refunded)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: ALREADY_REFUNDED
+                message: A refund already exists for this dispute ID.
+        '503':
+          description: Service unavailable (transient - retryable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: PAYMENTS_UNAVAILABLE
+                message: Payments service is temporarily unavailable.
+  /disputes/{dispute_id}:
+    patch:
+      summary: Update dispute status
+      operationId: updateDisputeStatus
+      parameters:
+        - name: dispute_id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: DSP-2026-000014
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeUpdateRequest'
+            example:
+              status: resolved
+              disposition: Approved
+              refund_reference: REF-2026-009821
+              resolution_note: Refund approved following evidence review.
+      responses:
+        '200':
+          description: Dispute status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisputeUpdateResponse'
+              example:
+                dispute_id: DSP-2026-000014
+                status: resolved
+                updated_at: '2026-10-10T09:43:12Z'
+        '503':
+          description: Service unavailable (transient - retryable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: PAYMENTS_UNAVAILABLE
+                message: Payments service is temporarily unavailable.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+    Transaction:
+      type: object
+      required:
+        - transaction_id
+        - customer_id
+        - merchant_name
+        - amount
+        - currency
+        - transaction_date
+        - status
+      properties:
+        transaction_id: { type: string, example: TXN-88421 }
+        customer_id: { type: string, example: CUST-1042 }
+        merchant_name: { type: string, example: Nordic Electronics BV }
+        merchant_category: { type: string, example: electronics }
+        amount: { type: number, format: double, example: 480.00 }
+        currency: { type: string, example: EUR }
+        transaction_date: { type: string, format: date, example: '2026-09-28' }
+        status: { type: string, enum: [settled, pending, refunded], example: settled }
+        payment_method: { type: string, example: credit_card }
+        refund_status: { type: string, enum: [none, processing, refunded], example: none }
+        dispute_status: { type: string, enum: [none, open, resolved], example: none }
+    RefundRequest:
+      type: object
+      required:
+        - dispute_id
+        - transaction_id
+        - refund_amount
+        - currency
+        - idempotency_key
+      properties:
+        dispute_id: { type: string, example: DSP-2026-000014 }
+        transaction_id: { type: string, example: TXN-88421 }
+        customer_id: { type: string, example: CUST-1042 }
+        refund_amount: { type: number, format: double, example: 480.00 }
+        currency: { type: string, example: EUR }
+        disposition:
+          type: string
+          enum: [Approved, Partially Approved, Rejected, More Information Required]
+          example: Approved
+        idempotency_key: { type: string, example: DSP-2026-000014 }
+        approved_by: { type: string, format: email, example: dispute.analyst@pegatest.example }
+        approval_timestamp: { type: string, format: date-time, example: '2026-10-10T09:42:00Z' }
+    RefundResponse:
+      type: object
+      required: [refund_reference, dispute_id, status]
+      properties:
+        refund_reference: { type: string, example: REF-2026-009821 }
+        dispute_id: { type: string, example: DSP-2026-000014 }
+        transaction_id: { type: string, example: TXN-88421 }
+        refund_amount: { type: number, format: double, example: 480.00 }
+        currency: { type: string, example: EUR }
+        status: { type: string, enum: [processing, completed, failed], example: processing }
+        expected_settlement_date: { type: string, format: date, example: '2026-10-13' }
+    DisputeUpdateRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [open, resolved, closed], example: resolved }
+        disposition:
+          type: string
+          enum: [Approved, Partially Approved, Rejected, More Information Required]
+          example: Approved
+        refund_reference: { type: string, example: REF-2026-009821 }
+        resolution_note: { type: string, example: Refund approved following evidence review. }
+    DisputeUpdateResponse:
+      type: object
+      required: [dispute_id, status]
+      properties:
+        dispute_id: { type: string, example: DSP-2026-000014 }
+        status: { type: string, example: resolved }
+        updated_at: { type: string, format: date-time, example: '2026-10-10T09:43:12Z' }

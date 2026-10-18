@@ -1,0 +1,174 @@
+openapi: 3.1.0
+info:
+  title: Risk API
+  version: 1.0.0
+  description: >-
+    Risk scoring system of record for the Dispute Resolution Hub. Stateless score for a
+    dispute given customer, transaction, and evidence context.
+servers:
+  - url: https://risk.example.com/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /risk-score:
+    post:
+      summary: Score a dispute
+      operationId: scoreDispute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiskScoreRequest'
+            examples:
+              low_risk:
+                summary: Scenario A - score 22 (Low)
+                value:
+                  dispute_id: DSP-2026-000014
+                  customer_id: CUST-1042
+                  transaction_id: TXN-88421
+                  amount: 480.00
+                  currency: EUR
+                  dispute_category: goods_not_received
+                  prior_disputes_12m: 1
+                  customer_tenure_months: 34
+                  evidence_uploaded: true
+              medium_risk:
+                summary: Scenario B - score 41 (Medium, high value)
+                value:
+                  dispute_id: DSP-2026-000015
+                  customer_id: CUST-1042
+                  transaction_id: TXN-99310
+                  amount: 4800.00
+                  currency: EUR
+                  dispute_category: cancelled_but_charged
+                  prior_disputes_12m: 1
+                  customer_tenure_months: 34
+                  evidence_uploaded: true
+              high_risk:
+                summary: Scenario C - score 87 (High, fraud indicators)
+                value:
+                  dispute_id: DSP-2026-000016
+                  customer_id: CUST-1128
+                  transaction_id: TXN-77120
+                  amount: 1250.00
+                  currency: EUR
+                  dispute_category: unauthorized_transaction
+                  prior_disputes_12m: 4
+                  customer_tenure_months: 9
+                  evidence_uploaded: false
+              missing_evidence:
+                summary: Scenario D - score 35 (Low, no evidence)
+                value:
+                  dispute_id: DSP-2026-000017
+                  customer_id: CUST-1033
+                  transaction_id: TXN-66001
+                  amount: 180.00
+                  currency: EUR
+                  dispute_category: goods_damaged_or_defective
+                  prior_disputes_12m: 0
+                  customer_tenure_months: 12
+                  evidence_uploaded: false
+      responses:
+        '200':
+          description: Risk assessment computed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskAssessment'
+              examples:
+                low:
+                  summary: Low risk
+                  value:
+                    risk_score: 22
+                    risk_band: Low
+                    fraud_indicators: []
+                    velocity_flag: false
+                    duplicate_transaction_flag: false
+                    device_mismatch_flag: false
+                    recommendation: Eligible for standard dispute workflow.
+                medium:
+                  summary: Medium risk
+                  value:
+                    risk_score: 41
+                    risk_band: Medium
+                    fraud_indicators: []
+                    velocity_flag: false
+                    duplicate_transaction_flag: false
+                    device_mismatch_flag: false
+                    recommendation: Analyst review recommended before approval.
+                high:
+                  summary: High risk - suspected fraud
+                  value:
+                    risk_score: 87
+                    risk_band: High
+                    fraud_indicators: [velocity_flag, device_mismatch_flag]
+                    velocity_flag: true
+                    duplicate_transaction_flag: false
+                    device_mismatch_flag: true
+                    recommendation: Senior analyst review required; evidence validation mandatory.
+        '503':
+          description: Risk service temporarily unavailable (transient - retryable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error_code: RISK_UNAVAILABLE
+                message: Risk service is temporarily unavailable, retry later.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code: { type: string }
+        message: { type: string }
+    RiskScoreRequest:
+      type: object
+      required:
+        - dispute_id
+        - customer_id
+        - transaction_id
+        - amount
+        - currency
+        - dispute_category
+      properties:
+        dispute_id: { type: string, example: DSP-2026-000014 }
+        customer_id: { type: string, example: CUST-1042 }
+        transaction_id: { type: string, example: TXN-88421 }
+        amount: { type: number, format: double, example: 480.00 }
+        currency: { type: string, example: EUR }
+        dispute_category:
+          type: string
+          enum:
+            - duplicate_charge
+            - unauthorized_transaction
+            - goods_not_received
+            - goods_damaged_or_defective
+            - incorrect_amount
+            - cancelled_but_charged
+            - subscription_billing_issue
+            - other
+          example: goods_not_received
+        prior_disputes_12m: { type: integer, example: 1 }
+        customer_tenure_months: { type: integer, example: 34 }
+        evidence_uploaded: { type: boolean, example: true }
+    RiskAssessment:
+      type: object
+      required: [risk_score, risk_band]
+      properties:
+        risk_score: { type: integer, minimum: 0, maximum: 100, example: 22 }
+        risk_band: { type: string, enum: [Low, Medium, High], example: Low }
+        fraud_indicators:
+          type: array
+          items: { type: string, example: velocity_flag }
+          example: []
+        velocity_flag: { type: boolean, example: false }
+        duplicate_transaction_flag: { type: boolean, example: false }
+        device_mismatch_flag: { type: boolean, example: false }
+        recommendation: { type: string, example: Eligible for standard dispute workflow. }

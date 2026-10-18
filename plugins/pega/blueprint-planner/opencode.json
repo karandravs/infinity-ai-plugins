@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "pega-plan": {
+      "type": "local",
+      "command": [
+        "node",
+        "<absolute-path-to>/plugins/pega/blueprint-planner/mcp/pega-plan/server.mjs"
+      ],
+      "environment": {
+        "TYPESAFE_API_KEY": "{env:TYPESAFE_API_KEY}",
+        "PEGA_CORPUS": "<absolute-path-to>/plugins/pega/infinity-ai-plugins/claude/resources/26-1"
+      },
+      "enabled": true
+    },
+    "pega-infinity-authoring": {
+      "type": "local",
+      "command": [
+        "java",
+        "-jar",
+        "./resources/infinity-rules-mcp.jar",
+        "--spring.profiles.active=stdio"
+      ],
+      "cwd": "<absolute-path-to>/plugins/pega/infinity-ai-plugins/claude",
+      "environment": {
+        "PEGA_SKILLS_PATH": "./resources",
+        "PEGA_CLIENT_MODE": "opencode-plugin",
+        "PEGA_BASE_URL": "<your-pega-base-url>"
+      },
+      "enabled": true
+    }
+  }
+}
