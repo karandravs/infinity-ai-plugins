@@ -64,7 +64,7 @@ const refKinds = (refs) => refs.length ? refs.map(r => `${r.path}=${JSON.stringi
 const keys = (payload) => payload ? Object.keys(payload).slice(0, 6).join(", ") : "—";
 
 const md = ["# Eval — blueprint → plan, across industries\n", `Generated ${new Date().toISOString().slice(0, 10)}. Planner: \`plan_pega_build\`. Stability = 2 calls route to the same rule set.\n`];
-let totalGoals = 0, stable = 0, gated = 0, withRefs = 0, fits = [], perIndustry = [];
+let totalGoals = 0, stable = 0, primaryStable = 0, gated = 0, withRefs = 0, fits = [], perIndustry = [];
 
 for (const [industry, goals] of Object.entries(INDUSTRIES)) {
   md.push(`\n## ${industry}\n`);
@@ -77,6 +77,8 @@ for (const [industry, goals] of Object.entries(INDUSTRIES)) {
     const setB = b.plans.filter(p => p.payload).map(p => p.ruleType).sort().join(",");
     const isStable = setA === setB && setA.length > 0;
     if (isStable) { stable++; iStable++; }
+    const primStable = !!a.primary && a.primary === b.primary;
+    if (primStable) primaryStable++;
     md.push(`### “${goal}”\n`);
     md.push(`- **routed**: ${setA || "(none)"} · **stable**: ${isStable ? "✅" : "⚠️"}${setA !== setB ? ` (varies: ${setB || "(none)"})` : ""}\n`);
     for (const p of a.plans) {
@@ -97,9 +99,9 @@ for (const [industry, goals] of Object.entries(INDUSTRIES)) {
 const avgFit = fits.length ? (fits.reduce((a, x) => a + x, 0) / fits.length).toFixed(2) : "—";
 md.unshift("");
 md.splice(2, 0,
-  `\n**Summary** — goals: ${totalGoals} · planning **stable**: ${stable}/${totalGoals} (${Math.round(100 * stable / totalGoals)}%) · plans gated \`required-keys-present\`: ${gated} · plans with references to fill: ${withRefs} · avg goalFit: ${avgFit}\n`,
+  `\n**Summary** — goals: ${totalGoals} · routing stable (set): ${stable}/${totalGoals} (${Math.round(100 * stable / totalGoals)}%) · **primary stable: ${primaryStable}/${totalGoals} (${Math.round(100 * primaryStable / totalGoals)}%)** · gated \`required-keys-present\`: ${gated} · with references: ${withRefs} · avg goalFit: ${avgFit}\n`,
   `Per industry (stable/total): ${perIndustry.map(([i, s, t]) => `${i} ${s}/${t}`).join(" · ")}\n`);
 
 writeFileSync(path.join(ROOT, "docs/eval-report.md"), md.join(""));
-console.log(`eval: ${totalGoals} goals · stable ${stable}/${totalGoals} (${Math.round(100 * stable / totalGoals)}%) · gated ${gated} · with-refs ${withRefs} · avgFit ${avgFit}`);
+console.log(`eval: ${totalGoals} goals · set-stable ${stable}/${totalGoals} (${Math.round(100 * stable / totalGoals)}%) · primary-stable ${primaryStable}/${totalGoals} (${Math.round(100 * primaryStable / totalGoals)}%) · gated ${gated} · with-refs ${withRefs} · avgFit ${avgFit}`);
 console.log(`wrote docs/eval-report.md · per industry: ${perIndustry.map(([i, s, t]) => `${i} ${s}/${t}`).join(" | ")}`);
