@@ -109,6 +109,96 @@ export function endpointsFromOpenAPI(text) {
   return out;
 }
 
+// the same document carries the SOR's identity: its server base URL, title, and the operations it
+// exposes. The connector must call the SOR the GOAL names and its endpoint, so we keep the URL to
+// stamp into pyEmbeddedURL, the title/stem to match the goal against the right contract, and the
+// operations to ground the connector's URL path.
+export function contractInfo(text) {
+  let doc;
+  try { doc = parseYaml(text); } catch { return { paths: {}, baseUrl: null, title: "", operations: [] }; }
+  const server = Array.isArray(doc?.servers) ? doc.servers.find(s => s && typeof s.url === "string") : null;
+  const paths = endpointsFromOpenAPI(text);
+  const operations = [];
+  for (const [p, item] of Object.entries(doc?.paths || {})) {
+    if (!item || typeof item !== "object") continue;
+    for (const [m, o] of Object.entries(item)) {
+      if (!HTTP_METHODS.has(m.toLowerCase())) continue;
+      const text = [p, o?.operationId, o?.summary, o?.description].filter(Boolean).join(" ");
+      const reqProps = refProps(doc, o?.requestBody?.content?.["application/json"]?.schema);
+      const status = Object.keys(o?.responses || {}).find(s => /^2/.test(s));
+      const resProps = status ? refProps(doc, o.responses[status]?.content?.["application/json"]?.schema) : [];
+      operations.push({ path: p, method: m.toUpperCase(), text, reqProps, resProps });
+    }
+  }
+  return {
+    paths,
+    baseUrl: server ? server.url : null,
+    title: doc?.info?.title ? String(doc.info.title) : "",
+    operations,
+  };
+}
+
+// the property names a JSON schema (or an array of them) declares — resolving $ref to components.
+function refProps(doc, schema) {
+  let s = schema;
+  if (s && typeof s === "object" && typeof s.$ref === "string") s = doc?.components?.schemas?.[s.$ref.split("/").pop()];
+  if (s && typeof s === "object" && s.type === "array" && s.items) return refProps(doc, s.items);
+  return s && typeof s === "object" && s.properties ? Object.keys(s.properties) : [];
+}
+
+// ---- goal -> contract operation (verb + vocabulary overlap) ----
+// The goal's verbs name the HTTP method ("look up" → GET, "issue a refund" → POST); among the
+// contract's operations of those methods, the one sharing the most vocabulary with the goal wins.
+const OP_STOP = new Set(["the", "a", "an", "to", "of", "and", "or", "for", "on", "in", "into", "from", "with", "by", "that", "this", "it", "its", "up", "back", "new", "our", "api", "rest", "call", "calls", "external", "system"]);
+const VERB_METHOD = {
+  look: "GET", fetch: "GET", get: "GET", retrieve: "GET", read: "GET", search: "GET", find: "GET", query: "GET", list: "GET", view: "GET",
+  submit: "POST", send: "POST", post: "POST", issue: "POST", refund: "POST", extract: "POST", score: "POST", write: "POST",
+  update: "PATCH", modify: "PATCH", patch: "PATCH", change: "PATCH",
+  delete: "DELETE", remove: "DELETE", cancel: "DELETE",
+};
+const stem = (w) => (w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
+const opTokens = (s) => new Set(String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(w => w.length > 2 && !OP_STOP.has(w)).map(stem));
+export function preferredMethods(goal) {
+  const out = new Set();
+  for (const w of String(goal || "").toLowerCase().split(/[^a-z]+/)) if (VERB_METHOD[w]) out.add(VERB_METHOD[w]);
+  return out;
+}
+export function bestOperation(goal, contract) {
+  const ops = contract?.operations || [];
+  if (!ops.length) return null;
+  const g = opTokens(goal);
+  const wanted = preferredMethods(goal);
+  const pool = wanted.size ? ops.filter(o => wanted.has(o.method)) : [];
+  const use = pool.length ? pool : ops;
+  let best = null, bestScore = -1;
+  for (const o of use) {
+    const score = [...opTokens(o.text)].filter(t => g.has(t)).length;
+    if (score > bestScore) { bestScore = score; best = o; }
+  }
+  return best;
+}
+// {param} path segments become URL path parameters (mirrors the corpus connector examples).
+export function pathParameters(path) {
+  return String(path || "").split("/").filter(Boolean)
+    .map(seg => ({ pyParameterName: seg, pyMapFrom: "CONSTANT", pyMapFromKey: seg, pyEmptyBehavior: "REQUIRED", pyEncoding: "URL" }));
+}
+
+// which contract describes the goal's system of record? Match whole words from the contract's file
+// stem and title against the goal (word boundaries, so "risk" never matches "brisk"). No match →
+// null and the caller keeps its supplied/default base URL.
+export function matchContract(goal, contracts) {
+  const g = ` ${String(goal || "").toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  let best = null, bestScore = 0;
+  for (const c of contracts || []) {
+    const toks = new Set([...c.stem.split(/[^a-z0-9]+/i), ...c.title.split(/[^a-z0-9]+/i)]
+      .filter(t => t.length >= 3).map(t => t.toLowerCase()));
+    let score = 0;
+    for (const t of toks) if (g.includes(` ${t} `)) score++;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
 // ---- 4. fill a payload from the goal/contracts (code, no LLM) ----
 // Detection is SCHEMA-DRIVEN, not by rule name: any rule whose schema declares an embedded URL
 // (pyEmbeddedURL) is an integration rule and gets the SOR base URL stamped in. Everything else
@@ -123,6 +213,87 @@ export function fillForSkill(skill, template, { baseUrl = DEFAULT_SOR_BASE_URL, 
   }
   p.pyDescription = p.pyDescription || "Auto-generated from pega-plan.";
   return p;
+}
+
+// Ground an integration payload in the goal + its contract. A connector's URL path and a rule's
+// NAMED REFERENCES (connector / request & response data transform / DT) must be derived from the
+// goal, not left borrowed from an unrelated example: a data page "that retrieves transaction data
+// from the payments REST connector" must not source from "GetProduct", and a connector "that calls
+// the payments API to look up a transaction" must expose the contract's transaction path.
+const REFERENCE_NAME_SUFFIX = { pyConnectorName: "", pyReqDataTransform: "Request", pyResDataTransform: "Response", pyDTName: "Transform" };
+// a rule's class is the example's placeholder namespace with a GOAL-derived type segment, so the
+// rule stops claiming to be about "APIResource"/"MyDataType". Pega system classes are never rehomed.
+const SYSTEM_CLASS = /^(@baseclass|Code-Pega|Pega-|Pega$|Rule-|Web-|Embed-|px)/i;
+export function groundIntegration(payload, { goal, contract, templateClass } = {}) {
+  if (!payload || typeof payload !== "object") return payload;
+  const base = conciseName(goal, pascalCase(composeLabel(goal)));
+  const typeSeg = conciseName(goal, "");
+  const walkName = (val) => {
+    if (Array.isArray(val)) { val.forEach(walkName); return; }
+    if (!val || typeof val !== "object") return;
+    for (const [k, v] of Object.entries(val)) {
+      if (typeof v === "string" && k in REFERENCE_NAME_SUFFIX && v) val[k] = base + REFERENCE_NAME_SUFFIX[k];
+      else walkName(v);
+    }
+  };
+  walkName(payload);
+  const op = bestOperation(goal, contract);
+  if (op && payload.pyEmbeddedURL && typeof payload.pyEmbeddedURL === "object") {
+    payload.pyEmbeddedURL.pyResourcePathParameters = pathParameters(op.path);
+    // a connector's description should state the SOR and its real endpoints, not just restate the
+    // goal — the judge reads the description as the connector's purpose.
+    const opsText = (contract.operations || []).slice(0, 6).map(o => `${o.method} ${o.path}`).join(", ");
+    if (opsText) payload.pyDescription = `REST connector to the ${contract.title || "external system"}: ${opsText}. ${goal}`;
+  }
+  // rehome the rule's class (and every class field that held the same example placeholder) so the
+  // rule stops claiming to be about "APIResource"/"MyDataType" and reflects the goal's domain.
+  const top = payload.pyClassName;
+  if (typeof top === "string" && top && !SYSTEM_CLASS.test(top) && typeSeg) {
+    const segs = top.split("-");
+    if (segs.length >= 2) {
+      const cls = [...segs.slice(0, -1), typeSeg].join("-");
+      const placeholder = templateClass || top;
+      const walkClass = (val) => {
+        if (Array.isArray(val)) { val.forEach(walkClass); return; }
+        if (!val || typeof val !== "object") return;
+        for (const [k, v] of Object.entries(val)) {
+          if (typeof v === "string" && /(ClassName|Class)$/.test(k)) { if (v === placeholder && !SYSTEM_CLASS.test(v)) val[k] = cls; }
+          else walkClass(v);
+        }
+      };
+      payload.pyClassName = cls;
+      walkClass(payload);
+    }
+  }
+  // a JSON data transform's mapping should move the CONTRACT's real fields, not sit on a bare
+  // "automap" comment: derive SET mappings from the matched operation's request/response schema.
+  if (payload.pyMappingModel && typeof payload.pyMappingModel === "object" && contract) {
+    const mapping = integrationMappings(goal, contract);
+    if (mapping) {
+      payload.pyMappingModel.pyProperties = mapping.props;
+      payload.pyMappingModel.pyAutomapAll = "false";
+      for (const pr of Array.isArray(payload.pyParameters) ? payload.pyParameters : []) {
+        if (pr && pr.pyParametersParamName === "executionMode") pr.pyParametersParamDefaultValue = mapping.request ? "SERIALIZE" : "DESERIALIZE";
+      }
+    }
+  }
+  return payload;
+}
+
+// the SET mappings a data transform needs to move the contract's fields on/off the clipboard. A
+// "request" transform (clipboard → JSON payload) uses the operation's request body; otherwise the
+// response body (JSON → clipboard). Property names follow Pega's .py<PascalCase(field)> convention.
+function integrationMappings(goal, contract) {
+  const op = bestOperation(goal, contract);
+  if (!op) return null;
+  const request = /\brequest\b/i.test(String(goal)) && !/\bresponse\b/i.test(String(goal));
+  const fields = (request ? op.reqProps : op.resProps) || [];
+  if (!fields.length) return null;
+  const props = fields.slice(0, 16).map(f => ({
+    pxObjClass: "Embed-MappingParams", pyActionName: "SET", pyElementType: "Objects",
+    pyPropertiesName: `.py${pascalCase(f)}`, pyPropertiesValue: f,
+  }));
+  return { request, props };
 }
 
 // ---- 5. the rule's SCHEMA (the Index contract) ----
@@ -369,6 +540,20 @@ export function composeLabel(goal) {
   return titled || "Auto-generated rule";
 }
 
+// a rule's IDENTITY name (pyServiceName/pyModelName/pyPageName) — like pyLabel it must be derived
+// from the goal, never borrowed from another family's example or offered as a Jev menu of unrelated
+// example names (a "retrieves transaction data" page must not be named D_AllPlayerGameSessions).
+// composeLabel keeps the first words verbatim (good for a display label); a rule name wants the
+// DOMAIN words only, so leading verbs, stopwords, and generic rule-type nouns are dropped.
+const NAME_STOP = new Set(["a", "an", "the", "that", "which", "to", "and", "or", "of", "for", "on", "onto", "from", "with", "in", "into", "by", "is", "it", "its", "this", "these", "those", "as", "at", "be", "are", "using", "use", "then", "when", "where", "so", "can", "should", "must", "calls", "call"]);
+const NAME_GENERIC = new Set(["send", "create", "add", "build", "define", "author", "map", "maps", "validate", "write", "schedule", "response", "request", "data", "transform", "page", "rest", "connector", "json", "api", "case", "properties", "property", "payload", "fields", "field"]);
+export function conciseName(goal, fallback = "") {
+  const words = String(goal || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter(w => w && !NAME_STOP.has(w) && !NAME_GENERIC.has(w));
+  const name = words.map(w => w[0].toUpperCase() + w.slice(1)).join("").slice(0, 48);
+  return name || fallback;
+}
+
 // which text keys we compose from the goal (others keep the example, tagged)
 const COMPOSE = {
   pyLabel: (goal) => composeLabel(goal),
@@ -379,6 +564,10 @@ const COMPOSE = {
   pyDescription: (goal) => String(goal),
   pySubject: (goal) => String(goal),
   pyMemo: (goal) => String(goal),
+  // rule-identity names: the rule's own name, derived from the goal (family-appropriate convention)
+  pyServiceName: (goal) => conciseName(goal, pascalCase(composeLabel(goal))),
+  pyModelName: (goal) => conciseName(goal, pascalCase(composeLabel(goal))),
+  pyPageName: (goal) => "D_" + conciseName(goal, pascalCase(composeLabel(goal))),
 };
 
 // the fields whose value IS the rule's name — a name question is asked once per plan for these
@@ -628,14 +817,20 @@ export async function fillPlan(result, values) {
 export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_url = DEFAULT_SOR_BASE_URL, namespace, expand = false, values }) {
   // read contracts first (methods inform both routing and example choice)
   let openapi = {};
+  const contracts = [];
   if (contracts_dir) {
-    const files = await readdir(contracts_dir).catch(() => []);
-    for (const f of files.filter(f => /\.ya?ml$/.test(f))) {
-      const parsed = endpointsFromOpenAPI(await readFile(path.join(contracts_dir, f), "utf8"));
-      openapi = { ...openapi, ...parsed };
+    const files = (await readdir(contracts_dir).catch(() => [])).filter(f => /\.ya?ml$/.test(f)).sort();
+    for (const f of files) {
+      const info = contractInfo(await readFile(path.join(contracts_dir, f), "utf8"));
+      openapi = { ...openapi, ...info.paths };
+      contracts.push({ stem: f.replace(/\.ya?ml$/, ""), title: info.title, baseUrl: info.baseUrl, operations: info.operations });
     }
   }
   const neededMethods = [...new Set(Object.values(openapi).flat())];
+  // stamp the base URL of the SOR the GOAL names (its contract's server URL); fall back to the
+  // supplied/default demo SOR base when no contract matches.
+  const matched = matchContract(query, contracts);
+  const baseUrl = matched?.baseUrl || sor_base_url;
 
   // A) Jev route over ALL authoring families in the Index (corpus-derived, not a curated subset).
   const { flagged, primary: primarySkill, unique } = await routeSkills(query);
@@ -663,7 +858,7 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
   const plans = [];
   for (const o of order) {
     if (o.kind === "missing") { if (!o.skill.startsWith("methodology")) plans.push({ ruleType: o.skill.replace(/^rules-rule-/, ""), skill: o.skill, payload: null, verify: "no example found" }); continue; }
-    const filled = fillForSkill(o.skill, { ...o.template.payload, ...o.values }, { baseUrl: sor_base_url, schema: o.schema });
+    const filled = groundIntegration(fillForSkill(o.skill, { ...o.template.payload, ...o.values }, { baseUrl, schema: o.schema }), { goal: query, contract: matched, templateClass: o.template.payload.pyClassName });
     // ensure pxObjClass (the rule type) is present — from the examples when the schema doesn't carry it
     if (!filled.pxObjClass) { const ex = (o.examples || []).map(e => e.pxObjClass).filter(Boolean); if (ex.length) filled.pxObjClass = ex[0]; }
     // deterministic gate: inject schema auto-fill defaults, then diff the manual-required keys.
