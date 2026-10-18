@@ -41,9 +41,11 @@ Show one rule appear in the app.
 
 ## 5 · The proof (evals) — 30s
 ```bash
-node eval/eval-plan.mjs     # 35 goals × 5 industries
+node eval/eval-plan.mjs         # 35 goals × 5 industries
+node eval/eval-integration.mjs  # 16 goals: connector→transforms→data page
 ```
-Open `eval/eval-report.md` → **primary-route stability 100%**, gated plans, per-rule layout.
+Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 97%**, gated plans,
+per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16**.
 
 ---
 ### The line to end on

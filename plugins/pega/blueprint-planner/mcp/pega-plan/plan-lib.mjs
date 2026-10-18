@@ -33,7 +33,7 @@ export function loadPlan(id) {
 const AUTHORING_PREFIXES = ["methodology", "rules-rule"]; // which corpus families are rules to author
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const DEFAULT_SOR_BASE_URL = "https://127.0.0.1:8123"; // demo systems-of-record base; override via planPegaBuild
-const ROUTE = { floor: 0.45, margin: 0.25, cap: 8 }; // recall-oriented shortlist (see routeSkills)
+const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 2 }; // recall-oriented shortlist (see routeSkills)
 const PICK = { requiredWeight: 5, methodWeight: 1.5, variantPenalty: 0.3, variantRe: /auth|dynamic|grouped/i };
 const CORPUS_CHOICE = { min: 2, max: 12, maxLen: 32, maxWords: 4 }; // a small observed vocabulary is a usable menu
 
@@ -252,25 +252,56 @@ export async function deriveCandidates() {
 }
 
 // ---- routing: one noul per family (plain desc) over the WHOLE corpus ----
-// Recall-oriented shortlist: Jev's absolute confidence for "this goal requires family X" is
-// compressed (0.5-0.8), so a fixed 0.75 cut drops the right family. Instead take everything
-// within `margin` of the top (with a small floor) and cap it — precision is enforced downstream
-// by the schema gate + per-payload Jev score, not here.
-export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap } = {}) {
+// Recall-oriented shortlist. Jev's absolute confidence for "this goal requires family X" is
+// compressed (0.5-0.8), so an absolute cut drops the right family. Two things matter:
+//   1. The cutoff is ANCHORED ON THE BEST AUTHORABLE FAMILY (rules-rule-*), not on the overall
+//      top. methodology-* are meta-docs (no create-rule payload); letting a 0.97 methodology
+//      score set the cutoff starves the plan set (e.g. "data model" goals) and makes the set
+//      flip when a rule family wobbles across the inflated cutoff.
+//   2. The margin is small (`tie`-scale): the junk second candidates sit far below the best
+//      rule, while genuinely-required second rules sit close to it; a wide margin keeps
+//      adding near-boundary families, which is exactly what makes repeated calls disagree.
+// Precision is still enforced downstream by the schema gate + per-payload Jev score.
+export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap, tie = ROUTE.tie, samples = ROUTE.samples } = {}) {
   const cands = await deriveCandidates();
+  const indexOf = new Map(cands.map((c, i) => [c.f, i])); // corpus order: a deterministic tie-break
+  const isRule = (f) => f.startsWith("rules-rule-");
   const questions = {};
   cands.forEach((c, i) => {
     questions[`fam${i}`] = { type: "noul", instructions: `The build goal (in the state) requires authoring/working on: ${c.desc}. Consider EVERY clause of the goal; answer true if ANY part requires it.` };
   });
-  const route = await jev({ state: `Build goal: "${query}"`, questions });
+  // Jev's noul wobbles ~±0.02 per call; a single sample makes the cutoff a coin-flip for any
+  // family sitting on it. Average `samples` independent calls to shrink that variance (the
+  // expected score is unchanged, so recall is not traded away) before applying the cutoff.
+  const runs = await Promise.all(Array.from({ length: Math.max(1, samples) }, () => jev({ state: `Build goal: "${query}"`, questions })));
   const ranked = cands
-    .map((c, i) => ({ f: c.f, p: route.answers[`fam${i}`]?.noul ?? 0 }))
-    .sort((a, b) => b.p - a.p);
-  const top = ranked[0]?.p ?? 0;
+    .map((c, i) => ({
+      f: c.f,
+      p: runs.reduce((sum, r) => sum + (r.answers?.[`fam${i}`]?.noul ?? 0), 0) / runs.length,
+    }))
+    .sort((a, b) => b.p - a.p || indexOf.get(a.f) - indexOf.get(b.f));
+  // anchor on the best AUTHORABLE rule family (fall back to the overall top only if none)
+  const topRule = ranked.find(x => isRule(x.f)) || ranked[0];
+  const top = topRule?.p ?? 0;
   const cutoff = Math.max(floor, top - margin);
   const flagged = ranked.filter(x => x.p >= cutoff).slice(0, cap);
-  // primary = the highest-confidence RULE family (skip methodology-* meta docs); fall back to any
-  const primaryEntry = flagged.find(x => x.f.startsWith("rules-rule-")) || flagged[0];
+  // never return an EMPTY rule shortlist when the model has any signal: if methodology docs
+  // starved the cut (a low-confidence route), keep every rule family statistically tied with
+  // the best one (`tie`). Precision is enforced downstream, so recall-safe beats "(none)".
+  if (!flagged.some(x => isRule(x.f)) && topRule) {
+    for (const x of ranked) if (isRule(x.f) && x.p >= top - tie && !flagged.includes(x)) flagged.push(x);
+  }
+  if (!flagged.length && ranked.length) flagged.push(ranked[0]);
+  // primary = the best AUTHORABLE family. Two rule families within `tie` are a statistical tie
+  // (Jev's noul jitter is ~±0.02); break it by corpus order so identical goals don't flip.
+  const ruleEntries = flagged.filter(x => isRule(x.f));
+  let primaryEntry;
+  if (ruleEntries.length) {
+    const bestRule = Math.max(...ruleEntries.map(x => x.p));
+    primaryEntry = ruleEntries
+      .filter(x => x.p >= bestRule - tie)
+      .sort((a, b) => indexOf.get(a.f) - indexOf.get(b.f))[0];
+  } else primaryEntry = flagged[0];
   const unique = [...new Set([primaryEntry?.f, ...flagged.map(x => x.f)].filter(Boolean))];
   return { flagged, ranked, primary: primaryEntry?.f || null, unique, candidateCount: cands.length };
 }
