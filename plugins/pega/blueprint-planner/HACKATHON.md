@@ -30,11 +30,11 @@ per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · R
 
 + SOR integration chain (eval/eval-integration.md) — 4 industries × 4 steps
   (REST connector → request transform → response transform → data page):
-  16 goals · routed 16/16 · expected-family match 16/16 · gated 16/16 · refs 7 · avgFit 0.45
+  16 goals · routed 16/16 · expected-family match 16/16 · gated 16/16 · refs 17 · avgFit 0.46
 
 + Blueprint layer, offline (eval/blueprint-proof.md + `blueprint/verify-blueprint.mjs`) —
   recipes parse, refs resolve, selectors well-formed, the create→complete chain covers 7/7 sections,
-  and every Blueprint artifact maps to a real corpus family: 14/15 asserts (1 honest gap: 2 dead helpers)
+  and every Blueprint artifact maps to a real corpus family: **15/15 asserts, no gaps**
 
 + Build path, offline (eval/build-path.md) — the exact `create-rule` calls a plan yields,
   composed + schema-checked with NO live environment: 6 rules · verify PASS 6/6
@@ -57,10 +57,10 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 - **Access** authoring (persona case/data access) is **not exposed** by the plugin → a **human step**.
 - Some rules are **version/corpus-dependent** (`resources/<ver>/`); set `PEGA_CORPUS` to match.
 - The **integration chain** routes + gates 16/16 and is now **grounded on the contracts** — the SOR the
-  goal names, its real endpoint path, and goal-derived chain refs (refs 7; avgFit 0.24→0.45; weak-fit 4/16,
-  all connectors) — we publish the numbers rather than hide them.
-- The blueprint verifier flags **2 dead helpers** in the live recipes (`recipe3-personas.cjs:body`,
-  `wire-bp.cjs:realDlg`) — a surfaced cleanup, not a hidden one.
+  goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.46; weak-fit 1/16 —
+  one connector whose noul is intrinsically low) — we publish the numbers rather than hide them.
+- Blueprint behaviour that needs a **live browser** (selectors matching the real DOM, login/import) is
+  **not** among the offline asserts — the verifier says so instead of pretending.
 
 ## Why it lands
 It's a **fork, not a rewrite** (one layer on the official plugin); it's **measurable** (stability,

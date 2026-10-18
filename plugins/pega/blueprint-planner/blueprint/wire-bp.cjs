@@ -6,7 +6,6 @@ const argv = process.argv.slice(2);
 const debug = argv.includes('--debug');
 const [obj, sys, res] = argv.filter(a=>!a.startsWith('--'));
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-async function realDlg(p){ return p.evaluate(()=>{ const d=Array.from(document.querySelectorAll('[role=dialog]')).filter(x=>!x.hasAttribute('inert')&&/Save/.test(x.innerText||'')); return d.length?d[0]:null; }); }
 async function pickCombo(p, id, text){
   await p.keyboard.press('Escape');
   await sleep(500);

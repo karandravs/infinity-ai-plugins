@@ -1,7 +1,6 @@
 // Step 5 Personas: rail nav, delete generated, add spec 5.
 const { chromium } = require('playwright-core');
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-async function body(p){ return p.evaluate(()=>{ const h=document.querySelector('header'),f=document.querySelector('footer'); for(const e of [h,f]) if(e) e.remove(); return document.body?document.body.innerText:''; }); }
 const PERSONAS = [
   ['Customer','Submits a dispute or refund request through the web portal, uploads evidence, and tracks case status.'],
   ['Dispute Analyst','Reviews high-risk exception disputes: evidence, AI summary, risk data; approves, rejects, or requests more information.'],

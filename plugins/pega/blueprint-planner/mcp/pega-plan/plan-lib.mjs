@@ -42,6 +42,12 @@ const PY_ADMIN = new Set([
   "pyRuleAvailable", "pyMethodStatus", "pyUsage", "pyRuleSet", "pyRuleSetVersion",
   "pyJavaGenerateAPIVersion", "pyOldActivityType", "pyDisplayMode", "pyBaseClass",
   "pyRuleName", "pxObjClass", "pyAccessGroup", "pyAccessGroupContext",
+  // a wire-format flag, not goal text: it says whether the POST body is form-encoded. The
+  // corpus exposes it as a two-value "vocabulary" (URL_ENCODED / ""), so a corpus-choice question
+  // made Jev stamp URL_ENCODED onto JSON APIs whose body mapping is plainly JSON — a wrong
+  // contract. It is derived from the matched operation's request content type instead (see
+  // groundIntegration), never picked by the model.
+  "pyPOSTDataMappingType",
 ]);
 
 const key = () => {
@@ -125,9 +131,12 @@ export function contractInfo(text) {
       if (!HTTP_METHODS.has(m.toLowerCase())) continue;
       const text = [p, o?.operationId, o?.summary, o?.description].filter(Boolean).join(" ");
       const reqProps = refProps(doc, o?.requestBody?.content?.["application/json"]?.schema);
+      // a form-encoded request body is the one case that sets pyPOSTDataMappingType=URL_ENCODED;
+      // a JSON body must leave the field absent (see PY_ADMIN / groundIntegration).
+      const form = Object.keys(o?.requestBody?.content || {}).some(ct => /x-www-form-urlencoded/i.test(ct));
       const status = Object.keys(o?.responses || {}).find(s => /^2/.test(s));
       const resProps = status ? refProps(doc, o.responses[status]?.content?.["application/json"]?.schema) : [];
-      operations.push({ path: p, method: m.toUpperCase(), text, reqProps, resProps });
+      operations.push({ path: p, method: m.toUpperCase(), text, reqProps, resProps, form });
     }
   }
   return {
@@ -177,6 +186,27 @@ export function bestOperation(goal, contract) {
   }
   return best;
 }
+// WHICH operations a connector must expose. The rule MUST carry all five method array sets (each
+// is a required key) but the skill's rule is "populate only the methods you actually use" — the
+// builder fills empty stubs for the rest. The template is picked for SCHEMA completeness, so it
+// arrives with EVERY method populated (a CRUD example's conditional-update If-Match/etag/body
+// mappings); a "look up a transaction and issue a refund" goal would then ship PUT/PATCH/DELETE
+// mappings it never calls, borrowed from an unrelated example. Used = the contract operations that
+// share vocabulary with the GOAL, plus the best-scoring one; a goal verb the contract does not
+// offer (e.g. "write back" against a PATCH endpoint) is still caught by the vocabulary pass.
+const METHOD_BLOCK_RE = /^py(GET|POST|PUT|PATCH|DELETE)(RequestHeaders|RequestParameters|RequestData|RequestDataList|ResponseHeaders|ResponseParameters|ResponseDataList)$/;
+export function usedMethods(goal, contract) {
+  const ops = contract?.operations || [];
+  const wanted = preferredMethods(goal);
+  if (!ops.length) return wanted;
+  const g = opTokens(goal);
+  const used = new Set();
+  const best = bestOperation(goal, contract);
+  if (best) used.add(best.method);
+  for (const o of ops) if ([...opTokens(o.text)].some(t => g.has(t))) used.add(o.method);
+  return used;
+}
+
 // {param} path segments become URL path parameters (mirrors the corpus connector examples).
 export function pathParameters(path) {
   return String(path || "").split("/").filter(Boolean)
@@ -238,12 +268,31 @@ export function groundIntegration(payload, { goal, contract, templateClass } = {
   };
   walkName(payload);
   const op = bestOperation(goal, contract);
-  if (op && payload.pyEmbeddedURL && typeof payload.pyEmbeddedURL === "object") {
-    payload.pyEmbeddedURL.pyResourcePathParameters = pathParameters(op.path);
-    // a connector's description should state the SOR and its real endpoints, not just restate the
-    // goal — the judge reads the description as the connector's purpose.
-    const opsText = (contract.operations || []).slice(0, 6).map(o => `${o.method} ${o.path}`).join(", ");
-    if (opsText) payload.pyDescription = `REST connector to the ${contract.title || "external system"}: ${opsText}. ${goal}`;
+  const used = usedMethods(goal, contract);
+  if (payload.pyEmbeddedURL && typeof payload.pyEmbeddedURL === "object" && (contract?.operations || []).length) {
+    if (op) payload.pyEmbeddedURL.pyResourcePathParameters = pathParameters(op.path);
+    // the description states what THIS connector does: the endpoints the goal needs. Listing every
+    // endpoint the SOR offers (a refund connector advertising the transaction lookup and the
+    // dispute update) describes a different connector — and the judge reads the description as the
+    // connector's purpose. The goal is kept so the purpose is stated, not just the URL.
+    const listed = contract.operations.filter(o => !used.size || used.has(o.method)).slice(0, 6)
+      .map(o => `${o.method} ${o.path}`).join(", ");
+    const sor = contract.title || "external system";
+    payload.pyDescription = listed ? `REST connector to the ${sor}: ${listed}. ${goal}` : `REST connector to the ${sor}. ${goal}`;
+    // the POST body wire format follows the SOR's contract: URL_ENCODED only for a form-encoded
+    // request body, absent for the (overwhelmingly common) JSON body. An example's URL_ENCODED flag
+    // must not ride along onto a JSON API — that is a contract the connector cannot honour.
+    if (op && op.form) payload.pyPOSTDataMappingType = "URL_ENCODED";
+    else delete payload.pyPOSTDataMappingType;
+  }
+  // empty the method blocks the goal does not use: the keys stay (all five sets are required) but
+  // their borrowed example mappings go, leaving the empty stub the builder expects. Only when the
+  // goal/contract name the methods to keep — otherwise leave the template untouched.
+  if ("pyEmbeddedURL" in payload && used.size) {
+    for (const k of Object.keys(payload)) {
+      const m = METHOD_BLOCK_RE.exec(k);
+      if (m && Array.isArray(payload[k]) && !used.has(m[1])) payload[k] = [];
+    }
   }
   // rehome the rule's class (and every class field that held the same example placeholder) so the
   // rule stops claiming to be about "APIResource"/"MyDataType" and reflects the goal's domain.
@@ -591,8 +640,14 @@ const BLANK_LEAF = /(PropertiesName|PropertiesValue|Message|Description|Subject|
 // together THROUGH these keys, so they are references even though they name a rule from a different
 // family (pyConnectorName → Rule-Connect-*, pyReq/ResDataTransform & pyDTName → Rule-Obj-Model,
 // pyPost/LoadActivity → Rule-Obj-Activity). pyConnectorList/pyConnectorClassName name a rule TYPE /
-// class, not a rule, so they are deliberately not references.
-const REFERENCE_LEAF = /(pyValidateActivity|pyLocalActionActivity|pyPreProcessingActivity|pyPreProcessingTransformRule|pyActionTransformRule|pyWhenRule|pyActionWhen|pyIntegrationSystemId|pyActivityName|pyStreamName|pyFlowName|pyImplementation|pyExpression|pyConnectorName|pyReqDataTransform|pyResDataTransform|pyDTName|pyPostActivity|pyLoadActivity)$/;
+// class, not a rule, so they are deliberately not references. pyHandlerFlow names the connector's
+// error-handler FLOW and pyAuthenticationProfile* name a Rule-Connect-AuthProfile — both are real
+// rule references the sample carries; pyModelName names another Rule-Obj-Model when it appears on a
+// pyProperties row (an APPLY_MODEL step), which is why it is guarded against the rule's own name.
+const REFERENCE_LEAF = /(pyValidateActivity|pyLocalActionActivity|pyPreProcessingActivity|pyPreProcessingTransformRule|pyActionTransformRule|pyWhenRule|pyActionWhen|pyIntegrationSystemId|pyActivityName|pyStreamName|pyFlowName|pyHandlerFlow|pyAuthenticationProfile|pyAuthenticationProfileForSetting|pyModelName|pyImplementation|pyExpression|pyConnectorName|pyReqDataTransform|pyResDataTransform|pyDTName|pyPostActivity|pyLoadActivity)$/;
+// keys whose value IS this rule's own name — a reference only when NESTED (an APPLY_MODEL row's
+// pyModelName names a different data transform; the rule-root pyModelName names this one).
+const SELF_NAME_KEYS = new Set(["pyRuleName", "pyLabel", "pyServiceName", "pyModelName", "pyPageName", "pyActivityName", "pyStreamName", "pyPurpose", "pyEmailTemplateName"]);
 
 // code generates candidate NAMES; Jev picks the best for the goal (Jev cannot write text, only select)
 export function nameCandidates(goal, templateLabel) {
@@ -766,7 +821,8 @@ export function blanksFor(plan) {
     if (typeof val === "string") {
       const topKey = clean.split(/[.[]/)[0];
       const ownName = NAME_KEYS.has(topKey) && ["goal-choice", "goal-text", "goal-composed"].includes(plan.provenance?.[topKey]?.source);
-      if (val && REFERENCE_LEAF.test(key) && !ownName && !out.some(o => o.path === clean)) out.push({ path: clean, kind: "reference", example: val });
+      const selfName = SELF_NAME_KEYS.has(key) && !/[.[]/.test(clean);
+      if (val && REFERENCE_LEAF.test(key) && !ownName && !selfName && !out.some(o => o.path === clean)) out.push({ path: clean, kind: "reference", example: val });
     }
     else if (Array.isArray(val)) val.forEach((v, i) => refWalk(v, `${path}[${i}]`));
     else if (val && typeof val === "object") for (const [k, v] of Object.entries(val)) refWalk(v, `${path}.${k}`);
@@ -863,6 +919,10 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
     if (!filled.pxObjClass) { const ex = (o.examples || []).map(e => e.pxObjClass).filter(Boolean); if (ex.length) filled.pxObjClass = ex[0]; }
     // deterministic gate: inject schema auto-fill defaults, then diff the manual-required keys.
     const missing = applySchema(filled, o.schema);
+    // grounding may drop a key that does not belong on this rule (e.g. an example's
+    // pyPOSTDataMappingType on a JSON API): keep provenance honest by dropping entries whose key
+    // is no longer in the payload.
+    for (const k of Object.keys(o.provenance || {})) if (!(k in filled)) delete o.provenance[k];
     const schemaIssues = validateSchema(filled, o.schema);
     plans.push({ ruleType: o.skill.replace(/^rules-rule-/, ""), skill: o.skill, sourceExample: o.template.file, payload: filled, schemaRequired: o.schema.requiredManual.length, verify: !o.schema.hasSchema ? "no-schema" : missing.length ? `missing-required: ${missing.join(",")}` : "required-keys-present", schemaIssues, provenance: o.provenance, valueSources: o.valueSources, lowConfidence: o.lowConfidence });
   }
