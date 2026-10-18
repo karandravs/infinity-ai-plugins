@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { systemOne, JevUnavailable } from "../../lib/jev-lib.mjs";
-import { requireOrder, familyProfile, expandFamilies } from "./graph-lib.mjs";
+import { requireOrder, familyProfile, expandFamilies, loadGraph } from "./graph-lib.mjs";
 import { composeContainer } from "./compose-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,7 @@ export function loadPlan(id) {
 const AUTHORING_PREFIXES = ["methodology", "rules-rule"]; // which corpus families are rules to author
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const DEFAULT_SOR_BASE_URL = "https://127.0.0.1:8123"; // demo systems-of-record base; override via planPegaBuild
-const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 2 }; // recall-oriented shortlist (see routeSkills)
+const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 2, band: 0.04 }; // recall-oriented shortlist (see routeSkills)
 const PICK = { requiredWeight: 5, methodWeight: 1.5, variantPenalty: 0.3, variantRe: /auth|dynamic|grouped/i };
 const CORPUS_CHOICE = { min: 2, max: 12, maxLen: 32, maxWords: 4 }; // a small observed vocabulary is a usable menu
 
@@ -78,12 +78,15 @@ export async function extractCreateRule(skillName) {
   for (const f of files) {
     if (!f.endsWith(".md")) continue;
     const md = await readFile(path.join(dir, f), "utf8");
+    // the frontmatter `description` states what the example IS FOR (e.g. "read-only data page
+    // sourced from a REST connector"); it is the strongest intent signal for example selection.
+    const desc = (md.match(/^---\n[\s\S]*?\bdescription:\s*(.+)$/m) || [])[1]?.trim() || "";
     // pull the last ```json ... ``` block (the create-rule payload) per file
     const blocks = [...md.matchAll(/```json\n([\s\S]*?)\n```/g)].map(b => b[1]);
     for (const b of blocks) {
       try {
         const j = JSON.parse(b);
-        out.push({ file: f, name: j.pyLabel || j.pyServiceName || j.pyModelName || f, payload: j });
+        out.push({ file: f, name: j.pyLabel || j.pyServiceName || j.pyModelName || f, desc, payload: j });
       } catch { /* skip non-JSON example blocks */ }
     }
   }
@@ -206,7 +209,7 @@ export function pickBestExample(examples, { neededMethods = [], requiredManual =
     const lower = keys.map(k => k.toLowerCase());
     let s = 0;
     if (requiredManual.length) s += PICK.requiredWeight * (requiredManual.filter(k => keys.includes(k)).length / requiredManual.length);
-    for (const m of neededMethods) if (lower.includes(`py${m}requestheaders`)) s += PICK.methodWeight;
+    for (const m of neededMethods) if (lower.includes(`py${String(m).toLowerCase()}requestheaders`)) s += PICK.methodWeight;
     if (PICK.variantRe.test(e.file)) s -= PICK.variantPenalty;
     return s;
   };
@@ -215,17 +218,28 @@ export function pickBestExample(examples, { neededMethods = [], requiredManual =
 
 // pick WHICH example to use as the template. Jev reads the goal against each example's identity
 // (semantic fit); the schema-completeness heuristic is only the fallback. One example → no call.
+// GUARANTEE (code, not judgment): if the contract requires methods (GET/POST/…) and some examples
+// stub ALL of them while others do not, only the covering examples are valid templates — a connector
+// that cannot express the SOR's operations would plan a rule that cannot call the API. Jev then
+// still picks the intent-best one; the heuristic is the fallback.
 export async function selectExample(goal, examples, { schema = {}, neededMethods = [], jevFn = jev } = {}) {
   if (!examples || !examples.length) return null;
   if (examples.length === 1) return examples[0];
+  const coversAll = (e) => {
+    const keys = Object.keys(e.payload || {}).map(k => k.toLowerCase());
+    return neededMethods.every(m => keys.includes(`py${String(m).toLowerCase()}requestheaders`));
+  };
+  const covering = neededMethods.length ? examples.filter(coversAll) : [];
+  const pool = covering.length ? covering : examples;
+  if (pool.length === 1) return pool[0];
   const criteria = {};
-  examples.forEach((e, i) => { criteria[String(i)] = `${i}: ${e.name || e.file}`; });
+  pool.forEach((e, i) => { criteria[String(i)] = `${i}: ${e.name || e.file}${e.desc ? ` — ${e.desc.slice(0, 110)}` : ""}`; });
   try {
-    const r = await jevFn({ state: { goal }, questions: { ex: { type: "choice", instructions: "Which example is the same rule type AND closest in intent to the build goal? Pick one by its number.", criteria } } });
+    const r = await jevFn({ state: { goal }, questions: { ex: { type: "choice", instructions: "Which example is the same rule type AND closest in intent to the build goal? Use each option's description, not just its name. Pick one by its number.", criteria } } });
     const idx = Number(r.answers?.ex?.choice);
-    if (Number.isInteger(idx) && examples[idx]) return examples[idx];
+    if (Number.isInteger(idx) && pool[idx]) return pool[idx];
   } catch { /* fall through to the heuristic */ }
-  return pickBestExample(examples, { neededMethods, requiredManual: schema.requiredManual });
+  return pickBestExample(pool, { neededMethods, requiredManual: schema.requiredManual });
 }
 
 // ---- candidate authoring families — DERIVED FROM THE INDEX (all rules-rule-* + methodology-*) ----
@@ -251,6 +265,16 @@ export async function deriveCandidates() {
   return _candCache;
 }
 
+// families the skills-graph explicitly relates to `root` (SIMILAR or REQUIRES, either direction).
+// Used to resolve boundary coin-flips deterministically (see routeSkills' `band`).
+function relatedTo(root) {
+  const { similarOf, requiresOf } = loadGraph();
+  const out = new Set([...(similarOf.get(root) || []), ...(requiresOf.get(root) || [])]);
+  for (const [f, set] of similarOf) if (set.has(root)) out.add(f);
+  for (const [f, set] of requiresOf) if (set.has(root)) out.add(f);
+  return out;
+}
+
 // ---- routing: one noul per family (plain desc) over the WHOLE corpus ----
 // Recall-oriented shortlist. Jev's absolute confidence for "this goal requires family X" is
 // compressed (0.5-0.8), so an absolute cut drops the right family. Two things matter:
@@ -262,7 +286,7 @@ export async function deriveCandidates() {
 //      rule, while genuinely-required second rules sit close to it; a wide margin keeps
 //      adding near-boundary families, which is exactly what makes repeated calls disagree.
 // Precision is still enforced downstream by the schema gate + per-payload Jev score.
-export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap, tie = ROUTE.tie, samples = ROUTE.samples } = {}) {
+export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap, tie = ROUTE.tie, samples = ROUTE.samples, band = ROUTE.band } = {}) {
   const cands = await deriveCandidates();
   const indexOf = new Map(cands.map((c, i) => [c.f, i])); // corpus order: a deterministic tie-break
   const isRule = (f) => f.startsWith("rules-rule-");
@@ -284,7 +308,21 @@ export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.m
   const topRule = ranked.find(x => isRule(x.f)) || ranked[0];
   const top = topRule?.p ?? 0;
   const cutoff = Math.max(floor, top - margin);
-  const flagged = ranked.filter(x => x.p >= cutoff).slice(0, cap);
+  // A family sitting ON the cutoff flips membership between calls: its own score AND the anchor
+  // both jitter by ~`band`, so the comparison is a coin-flip. Two rules keep the shortlist honest
+  // AND stable:
+  //   - the best-companion families (rank 1-2) and graph-related families get a `band` of leniency
+  //     around the cutoff, so a genuinely-required companion is never dropped by jitter;
+  //   - a THIRD-or-later family that merely scrapes past the cutoff is the noise that makes sets
+  //     flap (e.g. a "dataset" rule matching a "data model" goal), so it must clear the cutoff by
+  //     `band` — a decisive margin — to be kept.
+  const ruleRank = new Map();
+  { let rr = 0; for (const x of ranked) if (isRule(x.f)) ruleRank.set(x.f, ++rr); }
+  const related = topRule ? relatedTo(topRule.f) : new Set();
+  const lenient = (f) => (ruleRank.get(f) ?? 99) <= 2 || related.has(f);
+  const flagged = ranked
+    .filter(x => x.f === topRule?.f || x.p >= cutoff + band || (x.p >= cutoff - band && lenient(x.f)))
+    .slice(0, cap);
   // never return an EMPTY rule shortlist when the model has any signal: if methodology docs
   // starved the cut (a low-confidence route), keep every rule family statistically tied with
   // the best one (`tie`). Precision is enforced downstream, so recall-safe beats "(none)".
@@ -360,7 +398,12 @@ const CONTAINER_DISCRIMINATORS = {
 const BLANK_LEAF = /(PropertiesName|PropertiesValue|Message|Description|Subject|Memo|Text|Label|Stream|pyClassName)$/i;
 // fields that hold a REFERENCE to another rule — if left as the sample's value they dangle on build.
 // The planner surfaces them as `reference` blanks so the agent names a rule that exists (or clears it).
-const REFERENCE_LEAF = /(pyValidateActivity|pyLocalActionActivity|pyPreProcessingActivity|pyPreProcessingTransformRule|pyActionTransformRule|pyWhenRule|pyActionWhen|pyIntegrationSystemId|pyActivityName|pyStreamName|pyFlowName|pyImplementation|pyExpression)$/;
+// The integration chain (data page → connector → request/response data transforms) wires the steps
+// together THROUGH these keys, so they are references even though they name a rule from a different
+// family (pyConnectorName → Rule-Connect-*, pyReq/ResDataTransform & pyDTName → Rule-Obj-Model,
+// pyPost/LoadActivity → Rule-Obj-Activity). pyConnectorList/pyConnectorClassName name a rule TYPE /
+// class, not a rule, so they are deliberately not references.
+const REFERENCE_LEAF = /(pyValidateActivity|pyLocalActionActivity|pyPreProcessingActivity|pyPreProcessingTransformRule|pyActionTransformRule|pyWhenRule|pyActionWhen|pyIntegrationSystemId|pyActivityName|pyStreamName|pyFlowName|pyImplementation|pyExpression|pyConnectorName|pyReqDataTransform|pyResDataTransform|pyDTName|pyPostActivity|pyLoadActivity)$/;
 
 // code generates candidate NAMES; Jev picks the best for the goal (Jev cannot write text, only select)
 export function nameCandidates(goal, templateLabel) {
@@ -607,7 +650,11 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
     if (!examples.length) { order.push({ skill, kind: "missing" }); continue; }
     const schema = await loadSchema(skill);
     const template = await selectExample(query, examples, { schema, neededMethods });
-    order.push({ skill, kind: "plan", schema, template, examples: examples.map(e => e.payload) });
+    // the selected exemplar is the most intent-consistent one, so its OWN container items (pySteps,
+    // pyDataSourceList, pyProperties…) seed the composer's catalog first — a data page then wires its
+    // Connector source from the exemplar Jev judged closest to the goal, not from whichever sibling
+    // example happened to sort first.
+    order.push({ skill, kind: "plan", schema, template, examples: [template.payload, ...examples.filter(e => e !== template).map(e => e.payload)] });
   }
   const targets = order.filter(o => o.kind === "plan");
   const derived = await deriveValues(query, targets.map(o => ({ skill: o.skill, schema: o.schema, template: o.template.payload, examples: o.examples })), { namespace });

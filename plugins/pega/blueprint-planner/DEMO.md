@@ -37,15 +37,17 @@ integration, from `contracts/`).
 
 ## 4 · Build (the *agent*, via Pega's Authoring MCP) — ~30s
 The agent **fills the plan's `blanks`**, then calls `create-rule` in **build order**, into the branch.
-Show one rule appear in the app.
+Show one rule appear in the app. *(Needs a live env; the offline equivalent — the exact `create-rule`
+calls a plan yields, composed + schema-checked with no environment — is `eval/build-path.md`.)*
 
 ## 5 · The proof (evals) — 30s
 ```bash
 node eval/eval-plan.mjs         # 35 goals × 5 industries
 node eval/eval-integration.mjs  # 16 goals: connector→transforms→data page
 ```
-Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 97%**, gated plans,
-per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16**.
+Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%**, gated plans,
+per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16**; and
+`eval/build-path.md` → the exact `create-rule` calls, composed **offline** (no live env needed).
 
 ---
 ### The line to end on
