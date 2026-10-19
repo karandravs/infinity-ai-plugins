@@ -48,9 +48,10 @@ node blueprint/verify-blueprint.mjs  # 15 asserts over the blueprint recipes (of
 ```
 Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%, avgFit 0.39**, gated plans,
 per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16, avgFit 0.49**;
-`eval/backlog-proof.md` → **all 40 stories planned + composed offline**; `eval/blueprint-proof.md` → the
-blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family); and `eval/build-path.md` →
-the exact `create-rule` calls, composed **offline** (no live env needed).
+`eval/backlog-proof.md` → **all 40 stories planned + composed offline, 12 flagged as capability-not-in-corpus**;
+`eval/blueprint-proof.md` → the blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family);
+`eval/mcp-proof.md` → the **shipped MCP surface (27/27)**; and `eval/build-path.md` → the exact `create-rule`
+calls, composed **offline** (no live env needed).
 
 ---
 ### The line to end on

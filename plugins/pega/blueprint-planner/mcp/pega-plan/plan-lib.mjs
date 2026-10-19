@@ -631,6 +631,87 @@ export async function deriveCandidates() {
   return _candCache;
 }
 
+// ---- goal coverage: does ANY authoring family DECLARE the goal's capability? ----
+// Routing is recall-oriented (it ALWAYS returns a shortlist) and the schema gate only checks
+// structure — so a goal the corpus has no family for (a platform/security capability) still produces
+// a structurally-valid rule that does not do the job. This derives an HONEST coverage signal from
+// the corpus itself instead of substituting silently: the corpus's authoring families each DECLARE
+// the artefact they author — family name, manifest description, skill frontmatter, graph
+// keywords/concepts. If the goal's capability noun is absent from that declared vocabulary, no
+// family genuinely fits. Abbreviations the corpus ITSELF uses (ALL-CAPS terms such as UX/SLA/REST in
+// skill prose) count as declared too, so the corpus's own shorthand is never mistaken for a gap.
+// Code for a guarantee, derived from the corpus — never a list of story titles.
+const COVERAGE_VERB = /^\s*(configure|create|set\s*up|setup|build|add|define|implement|enable|support|provide|author|design|make|write|map|validate|schedule|send)\b[:\s-]*/i;
+const COVERAGE_CUT = /\b(?:for|with|that|which|who|to|by|using|based|on|of|from|into)\b/i;
+const COVERAGE_STOP = new Set(["a", "an", "the", "of", "to", "and", "or", "for", "with", "on", "in", "into", "by", "using", "use", "from", "that", "which", "who", "new", "its", "it", "this", "these", "those", "capture"]);
+const coverageStem = (w) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+const wordRe = (w) => new RegExp(`(?<![a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9])`);
+
+// the capability a goal names: "Configure Email Account" -> "email account";
+// "Create a dispute case type with stages for intake…" -> "dispute case type".
+export function goalCapability(goal) {
+  let s = String(goal || "").replace(COVERAGE_VERB, "");
+  s = s.split(/\s+[-\u2013\u2014]\s+/)[0]; // drop the domain qualifier: "UX - Disputes…" -> "UX"
+  s = s.split(COVERAGE_CUT)[0];           // drop trailing purpose/relative clauses
+  return s.trim().toLowerCase();
+}
+// the NOUN that names the capability ("email account" -> "account", "data model" -> "model").
+export function goalCapabilityHead(goal) {
+  const t = goalCapability(goal).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w && !COVERAGE_STOP.has(w));
+  return t.length ? coverageStem(t[t.length - 1]) : "";
+}
+
+// every file under `root`, as paths relative to `root` (so `examples/` / `schema/` can be skipped).
+async function listFiles(root, rel = "", out = []) {
+  const dir = rel ? path.join(root, rel) : root;
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) await listFiles(root, r, out); else out.push(r);
+  }
+  return out;
+}
+
+// the vocabulary the authoring corpus DECLARES: family names + manifest descriptions + skill
+// frontmatter + graph keywords/concepts, plus the ALL-CAPS terms the corpus uses in prose. Payloads
+// (examples/) and JSON schemas are skipped — a value that happens to appear in a sample payload is
+// not a declaration that the corpus authors that capability.
+let _coverageVocab = null;
+export async function corpusVocabulary() {
+  if (_coverageVocab) return _coverageVocab;
+  const manifest = JSON.parse(await readFile(path.join(CORPUS, "manifest.json"), "utf8"));
+  const descOf = new Map();
+  for (const s of manifest.skills) {
+    const f = s.name.split("/")[0];
+    if (s.name.startsWith("rules-rule-") && !descOf.has(f)) descOf.set(f, s.description || "");
+  }
+  const decl = []; const acronyms = new Set();
+  const authorDirs = (await readdir(path.join(CORPUS, "skills")).catch(() => [])).filter(f => f.startsWith("rules-rule-"));
+  for (const f of authorDirs) {
+    let front = ""; const prose = [];
+    for (const rel of await listFiles(path.join(CORPUS, "skills", f))) {
+      if (/^(?:examples|schema)\//.test(rel)) continue;
+      let t = ""; try { t = await readFile(path.join(CORPUS, "skills", f, rel), "utf8"); } catch { continue; }
+      prose.push(t);
+      if (rel === "SKILL.md") front = (t.match(/^---\n[\s\S]*?\ndescription:\s*(.+)$/m) || [])[1] || "";
+    }
+    for (const m of prose.join("\n").matchAll(/\b[A-Z][A-Z0-9]{1,5}\b/g)) acronyms.add(m[0].toLowerCase());
+    const p = familyProfile(f);
+    decl.push([f, descOf.get(f) || "", front, ...(p.keywords || []), ...(p.concepts || [])].join(" "));
+  }
+  return (_coverageVocab = { text: decl.join("\n").toLowerCase(), acronyms });
+}
+
+// the coverage verdict for a goal against the vocabulary (pure; the caller supplies the vocabulary).
+export function coverageFor(goal, vocab) {
+  const phrase = goalCapability(goal);
+  const head = goalCapabilityHead(goal);
+  if (!head) return { covered: true, capability: head, phrase, reason: "no capability noun to check" };
+  const covered = wordRe(head).test(vocab.text) || vocab.acronyms.has(head);
+  return covered
+    ? { covered: true, capability: head, phrase, reason: `the authoring corpus declares a family for "${head}"` }
+    : { covered: false, capability: head, phrase, reason: `no authoring rule family in the corpus declares the capability "${head}" — routing substitutes a structurally-valid rule that does not do the job` };
+}
+
 // families the skills-graph explicitly relates to `root` (SIMILAR or REQUIRES, either direction).
 // Used to resolve boundary coin-flips deterministically (see routeSkills' `band`).
 function relatedTo(root) {
@@ -1134,11 +1215,19 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
     }
   }
 
+  // goal coverage: an HONEST "no-fitting-family" signal derived from what the corpus DECLARES it
+  // authors. Routing always returns something and the schema gate only checks structure, so without
+  // this the planner silently substitutes a rule that cannot do the job. Additive: it changes
+  // neither routing nor goalFit/verify.
+  const coverage = coverageFor(query, await corpusVocabulary());
+
   const result = {
     query,
     neededMethods,
     primary: primarySkill || null,
     routable: plans.length > 0,
+    coverage,
+    caveats: coverage.covered ? [] : [`uncovered goal: ${coverage.reason}`],
     routedSkills: ordered,
     routing: flagged.map(x => ({ skill: x.f, confidence: Number(x.p.toFixed(2)) })),
     agentFilled,

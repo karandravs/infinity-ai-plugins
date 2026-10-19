@@ -35,6 +35,11 @@ per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · R
 + The WHOLE blueprint backlog, offline (eval/backlog-proof.md) — all 40 stories →
   plan → the ordered `create-rule` calls, with no live environment:
   40/40 planned · 40/40 composed · verify PASS 40/40
+  …and the planner **flags the 12** whose capability the corpus does not declare
+  (email-account, SSO, access-control) instead of silently substituting — 0 false flags on the 51 eval goals
+
++ The shipped MCP surface (eval/mcp-proof.md) — the real server spawned over stdio:
+  27/27 asserts · tool `plan_pega_build` + prompt `pega-build` + shipped skill, end-to-end
 
 + Blueprint layer, offline (eval/blueprint-proof.md + `blueprint/verify-blueprint.mjs`) —
   recipes parse, refs resolve, selectors well-formed, the create→complete chain covers 7/7 sections,
@@ -63,10 +68,10 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 - The **integration chain** routes + gates 16/16 and is now **grounded on the contracts** — the SOR the
   goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.49; weak-fit 1/16 —
   one connector whose noul is intrinsically low) — we publish the numbers rather than hide them.
-- **All 40 backlog stories plan + compose**, but 12 hit a **kind-coverage gap**: the corpus has no family
-  for email-account/SSO/access-control goals, so the planner authors a *structurally valid* rule that isn't
-  the right one. The `verify PASS 40/40` is **near-tautological** (the planner only composes rules whose
-  `verify` it set) — the honest signals are *planned/composed* and this gap, both stated in the doc.
+- **All 40 backlog stories plan + compose**, and 12 are **flagged** by the planner's own `coverage`
+  signal as **capability-not-in-corpus** (no family for email-account/SSO/access-control) — *flagged, never
+  silently substituted*. The `verify PASS 40/40` is **near-tautological** (the planner only composes rules
+  whose `verify` it set) — the honest signals are *planned/composed*, *coverage*, and the published gap.
 - Blueprint behaviour that needs a **live browser** (selectors matching the real DOM, login/import) is
   **not** among the offline asserts — the verifier says so instead of pretending.
 
