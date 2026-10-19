@@ -33,15 +33,18 @@ export function loadPlan(id) {
 const AUTHORING_PREFIXES = ["methodology", "rules-rule"]; // which corpus families are rules to author
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 const DEFAULT_SOR_BASE_URL = "https://127.0.0.1:8123"; // demo systems-of-record base; override via planPegaBuild
-const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 2, band: 0.04 }; // recall-oriented shortlist (see routeSkills)
+const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 3, band: 0.04 }; // recall-oriented shortlist (see routeSkills)
 const PICK = { requiredWeight: 5, methodWeight: 1.5, variantPenalty: 0.3, variantRe: /auth|dynamic|grouped/i };
 const CORPUS_CHOICE = { min: 2, max: 12, maxLen: 32, maxWords: 4 }; // a small observed vocabulary is a usable menu
 
 const VALUE_FLOOR = 0.5; // goal-choice confidence below this is flagged for review
 const PY_ADMIN = new Set([
-  "pyRuleAvailable", "pyMethodStatus", "pyUsage", "pyRuleSet", "pyRuleSetVersion",
+  "pyRuleAvailable", "pyMethodStatus", "pyRuleSet", "pyRuleSetVersion",
   "pyJavaGenerateAPIVersion", "pyOldActivityType", "pyDisplayMode", "pyBaseClass",
   "pyRuleName", "pxObjClass", "pyAccessGroup", "pyAccessGroupContext",
+  // NOTE: pyUsage is deliberately NOT here. It is a free-text "usage note" describing what the
+  // rule is for (the obj-class schema even marks it required), so it must be goal-derived like
+  // any other purpose text — otherwise a dispute data model ships "Data class for address records".
   // a wire-format flag, not goal text: it says whether the POST body is form-encoded. The
   // corpus exposes it as a two-value "vocabulary" (URL_ENCODED / ""), so a corpus-choice question
   // made Jev stamp URL_ENCODED onto JSON APIs whose body mapping is plainly JSON — a wrong
@@ -345,6 +348,149 @@ function integrationMappings(goal, contract) {
   return { request, props };
 }
 
+// ---- grounding for non-integration rules ----
+// The judge (and the builder) read the payload as "what THIS rule is". When a goal names the rule's
+// own domain content — the stages of a case type, the duration of an SLA — that must land in the
+// payload. Left alone it carries the EXAMPLE's words (Create/Fulfillment/Completed, a 1-day goal),
+// which describes a different rule. These derivations are structural (a named list, a duration),
+// never a lookup of specific goals.
+
+export function titleCase(s) {
+  return String(s || "").toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+}
+
+// "a, b and c" / "a, b, and c" / "a; b; c" -> ["a","b","c"]
+export function splitEnumeration(s) {
+  return String(s || "")
+    .split(/\s*,\s*|\s*;\s*|\s+and\s+|\s+or\s+/i)
+    .map(x => x.trim().replace(/^(?:and|or)\s+/i, "").replace(/[.;:]+$/, "").trim())
+    .filter(Boolean);
+}
+
+// the stages a goal names: "with stages for intake, investigation, and resolution" -> [Intake, …].
+// No named list (e.g. "with two lifecycle stages") -> [] and the example's stages are kept.
+export function goalStageNames(goal) {
+  const m = String(goal || "").match(/\bstages?\s*(?:for|of|:)\s*([^.;:]+)/i);
+  if (!m) return [];
+  const names = splitEnumeration(m[1]).filter(w => w.length <= 40 && w.split(/\s+/).length <= 4);
+  return names.length >= 2 ? names.map(titleCase) : [];
+}
+
+// Ground a case type's lifecycle in the goal: the goal's stage names replace the example's, on the
+// example's structural scaffold (valid IDs / transitions / terminal flags).
+export function groundCaseTypeStages(payload, goal) {
+  const names = goalStageNames(goal);
+  if (!payload || names.length < 2) return false;
+  const stages = Array.isArray(payload.pyStages) ? payload.pyStages : [];
+  if (!stages.length) return false;
+  payload.pyStages = names.map((label, i) => {
+    const st = JSON.parse(JSON.stringify(stages[Math.min(i, stages.length - 1)]));
+    st.pyStageID = `PRIM${i}`;
+    st.pyStageName = label;
+    const first = i === 0, last = i === names.length - 1;
+    st.pyIsInitializationStage = first ? "true" : "false";
+    st.pyIsTerminalStage = last ? "true" : "false";
+    if (last) {
+      st.pyStageTransition = "resolution";
+      st.pyStageWorkStatus = st.pyStageWorkStatus || "Resolved-Completed";
+      st.pyCleanupProcess = "true";
+      delete st.pyStageEntryStatus;
+    } else {
+      st.pyStageTransition = "automatic";
+      delete st.pyStageWorkStatus;
+      delete st.pyCleanupProcess;
+      if (!first && !st.pyStageEntryStatus) st.pyStageEntryStatus = "Open-InProgress";
+      else if (first) delete st.pyStageEntryStatus;
+    }
+    if (Array.isArray(st.pyProcesses)) for (const pr of st.pyProcesses) { pr.pyLabel = label; pr.pyFlowName = label; }
+    return st;
+  });
+  payload.pyStageIDMax = String(names.length);
+  return true;
+}
+
+// Ground a property in the goal: its NAME is the rule's own identity, and its page/link fields must
+// agree with its mode. An exemplar's "LinkedEnhancement : PegaProjMgmt-Work-Enhancement" page is a
+// different rule; on a non-page property an exemplar's Page fields are plain leakage.
+export function groundObjectProperty(payload, goal) {
+  if (!payload || typeof payload !== "object") return [];
+  const authored = [];
+  const name = conciseName(goal, "");
+  if (name) { payload.pyPropertyName = name; authored.push("pyPropertyName"); }
+  const pageMode = /^(Page|PageList|PageGroup)$/.test(String(payload.pyPropertyMode || ""));
+  if (pageMode && payload.pyClassName) {
+    payload.pyPageClass = payload.pyClassName; authored.push("pyPageClass");
+    delete payload.pyDataObject; delete payload.pyDOParamList; delete payload.pyDOKeyList;
+  } else {
+    for (const k of ["pyPageClass", "pyDataObject", "pyDataObjectClass", "pyDOParamList", "pyDOKeyList", "pyDataRetrievalType"]) delete payload[k];
+  }
+  // attachment/validation leftovers belong to the exemplar, not to any property in this goal
+  delete payload.pyCategoryName; delete payload.pyEditValidate;
+  return authored;
+}
+
+// the decision factors a goal names: "routes disputes by risk band and amount" -> [risk band,
+// amount]. A decision table decides on named conditions; they come from the goal, not the exemplar
+// (whose locale/date-format columns describe a totally different decision).
+export function goalDecisionFactors(goal) {
+  const m = String(goal || "").match(/\b(?:by|based on|using)\s+([^.;:]+)/i);
+  if (!m) return [];
+  return splitEnumeration(m[1]).filter(w => w.length <= 40 && w.split(/\s+/).length <= 4);
+}
+
+// Ground a decision table's condition columns in the goal's factors.
+export function groundDecisionTable(payload, goal) {
+  const factors = goalDecisionFactors(goal);
+  if (!payload || !factors.length) return [];
+  const prop = f => "." + f.split(/\s+/).map(w => w[0].toUpperCase() + w.slice(1).toLowerCase()).join("");
+  payload.pyColumns = factors.map(f => ({ pyProperty: prop(f), pyPropertyLabel: titleCase(f), pyColumnDataType: "text", pyCondition: [] }));
+  payload.pyPropertyColumns = factors.map(f => ({ pyProperty: prop(f), pyPropertyLabel: titleCase(f), pyPropertyValues: [], pyDefaultPropertySetOperator: "=" }));
+  // the exemplar's result rows belong to the exemplar's conditions — drop them with the columns.
+  delete payload.pyResults; delete payload.pyDefaultResultPropSet;
+  return ["pyColumns", "pyPropertyColumns"];
+}
+
+// per-family dispatch: names the rule's OWN content from the goal; returns the grounded top-level
+// keys so provenance can record them as goal-derived (the agent then does not re-fill them).
+export function groundPlan(payload, { goal, skill } = {}) {
+  const grounded = [];
+  const fam = String(skill || "");
+  if (fam.endsWith("obj-casetype") && groundCaseTypeStages(payload, goal)) grounded.push("pyStages");
+  if (fam.endsWith("obj-servicelevel") && groundServiceLevel(payload, goal)) grounded.push("pyGoalDefaultDays");
+  if (fam.endsWith("obj-property")) grounded.push(...groundObjectProperty(payload, goal));
+  if (fam.endsWith("declare-decision-table")) grounded.push(...groundDecisionTable(payload, goal));
+  return grounded;
+}
+
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30 };
+
+// the duration a goal states, in days: "after five days" -> 5, "1-business-day" -> 1, "within 2
+// hours" -> 0.083. Null when the goal states no duration.
+export function goalDurationDays(goal) {
+  const m = String(goal || "").match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty)[\s-]*(?:(?:business|working)[\s-]+)?(day|days|week|weeks|month|months|hour|hours|minute|minutes)\b/i);
+  if (!m) return null;
+  const n = NUMBER_WORDS[m[1].toLowerCase()] ?? Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const unit = m[2].toLowerCase();
+  if (unit.startsWith("hour")) return n / 24;
+  if (unit.startsWith("minute")) return n / 1440;
+  if (unit.startsWith("week")) return n * 7;
+  if (unit.startsWith("month")) return n * 30;
+  return n;
+}
+
+// Ground an SLA in the goal's duration: an escalation "after five days" must set a five-day goal,
+// not keep the example's one day.
+export function groundServiceLevel(payload, goal) {
+  const d = goalDurationDays(goal);
+  if (!payload || d == null || !("pyGoalDefaultDays" in payload)) return false;
+  payload.pyGoalDefaultDays = String(Math.floor(d));
+  payload.pyGoalDefaultHours = String(Math.round((d % 1) * 24));
+  payload.pyGoalDefaultMinutes = "0";
+  payload.pyGoalDefaultSeconds = "0";
+  return true;
+}
+
 // ---- 5. the rule's SCHEMA (the Index contract) ----
 // Reads skills/<skill>/schema/*.json and classifies required keys: x-pega-autoDerived (Pega
 // derives, e.g. pyRuleName) and x-pega-autoFill (Pega supplies a default, e.g. pxObjClass) are
@@ -582,6 +728,13 @@ export function pascalCase(s) {
     .map(w => w[0].toUpperCase() + w.slice(1)).join("").slice(0, 64);
 }
 
+// the goal as a plain STATEMENT of what the rule is for (leading imperative verb dropped and the
+// result capitalised), for purpose/usage text that describes THIS rule rather than an example's.
+export function goalStatement(goal) {
+  const s = String(goal || "").trim().replace(/^\s*(send|create|add|build|schedule|define|author|map|validate|write|configure|set|make|design|implement|provide|extend|enable|allow|support)\b[:\s]*/i, "");
+  return s ? s[0].toUpperCase() + s.slice(1) : String(goal || "");
+}
+
 export function composeLabel(goal) {
   const stripped = String(goal).trim().replace(/^\s*(send|create|add|build|schedule|define|author|map|validate|write)\b[:\s]*/i, "");
   const titled = stripped.split(/\s+/).filter(Boolean).slice(0, 5)
@@ -613,6 +766,9 @@ const COMPOSE = {
   pyDescription: (goal) => String(goal),
   pySubject: (goal) => String(goal),
   pyMemo: (goal) => String(goal),
+  // a rule's "usage"/purpose text must state what THIS rule is for. Left to the example it reads
+  // "Data class for address records" on a dispute data model — a different rule's words.
+  pyUsage: (goal) => goalStatement(goal),
   // rule-identity names: the rule's own name, derived from the goal (family-appropriate convention)
   pyServiceName: (goal) => conciseName(goal, pascalCase(composeLabel(goal))),
   pyModelName: (goal) => conciseName(goal, pascalCase(composeLabel(goal))),
@@ -701,7 +857,11 @@ export async function deriveValues(goal, targets, { namespace, jevFn = jev } = {
       } else if (role === "namespace") {
         const composed = (namespace && template[key]) ? `${namespace}-${suffixOf(template[key])}` : (key in template ? template[key] : undefined);
         if (composed !== undefined) { values[key] = composed; provenance[key] = { value: composed, source: namespace ? "namespace" : "example-default" }; }
-      } else if (role === "text" && COMPOSE[key]) {
+      } else if (role === "text" && COMPOSE[key] && (key !== "pyUsage" || key in template || (schema.requiredManual || []).includes(key))) {
+        // pyUsage is a family-specific "usage note": compose it only where the rule family carries
+        // one (or the schema requires it) — e.g. a ruleset-name's pyUsage holds a ruleset name
+        // convention, not a goal statement. Other COMPOSE text is a rule's own description and is
+        // filled wherever the schema declares it.
         values[key] = COMPOSE[key](goal); provenance[key] = { value: values[key], source: "goal-text" };
       } else if (role === "text") {
         const cands = observedCandidates(observed[key]);
@@ -754,8 +914,17 @@ export async function deriveValues(goal, targets, { namespace, jevFn = jev } = {
         continue;
       }
       if (ans.choice !== undefined && pp.enums[k].includes(ans.choice)) {
-        pp.values[k] = ans.choice;
-        pp.provenance[k] = { value: ans.choice, source: "goal-choice", candidatesFrom: pp.candidatesFrom[k], confidence: ans.confidence ?? null };
+        const conf = ans.confidence ?? null;
+        // A below-floor guess is not a decision: the model itself rates it < VALUE_FLOOR. Keep the
+        // exemplar's value (it was selected for intent-fit) instead of letting an unconfident enum
+        // guess replace it — and record the attempt so it is still flagged for review.
+        const keepExample = typeof conf === "number" && conf < VALUE_FLOOR && (k in pp.template);
+        pp.values[k] = keepExample ? pp.template[k] : ans.choice;
+        pp.provenance[k] = {
+          value: pp.values[k], source: keepExample ? "example-default" : "goal-choice",
+          candidatesFrom: pp.candidatesFrom[k], confidence: conf,
+          ...(keepExample ? { attemptedChoice: ans.choice } : {}),
+        };
       } else if (k in pp.template) {
         pp.provenance[k] = { value: pp.template[k], source: "example-default" };
       }
@@ -764,7 +933,7 @@ export async function deriveValues(goal, targets, { namespace, jevFn = jev } = {
 
   return perPlan.map(pp => {
     const lowConfidence = Object.entries(pp.provenance)
-      .filter(([, p]) => p.source === "goal-choice" && typeof p.confidence === "number" && p.confidence < VALUE_FLOOR)
+      .filter(([, p]) => p.attemptedChoice !== undefined || (p.source === "goal-choice" && typeof p.confidence === "number" && p.confidence < VALUE_FLOOR))
       .map(([k]) => k);
     const valueSources = {};
     for (const p of Object.values(pp.provenance)) valueSources[p.source] = (valueSources[p.source] || 0) + 1;
@@ -915,6 +1084,9 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
   for (const o of order) {
     if (o.kind === "missing") { if (!o.skill.startsWith("methodology")) plans.push({ ruleType: o.skill.replace(/^rules-rule-/, ""), skill: o.skill, payload: null, verify: "no example found" }); continue; }
     const filled = groundIntegration(fillForSkill(o.skill, { ...o.template.payload, ...o.values }, { baseUrl, schema: o.schema }), { goal: query, contract: matched, templateClass: o.template.payload.pyClassName });
+    // ground the rule's OWN domain content in the goal (stages, durations…), then record it as
+    // goal-derived so the agent-fill loop does not treat it as borrowed example content.
+    for (const k of groundPlan(filled, { goal: query, skill: o.skill })) o.provenance[k] = { value: filled[k], source: "goal-composed" };
     // ensure pxObjClass (the rule type) is present — from the examples when the schema doesn't carry it
     if (!filled.pxObjClass) { const ex = (o.examples || []).map(e => e.pxObjClass).filter(Boolean); if (ex.length) filled.pxObjClass = ex[0]; }
     // deterministic gate: inject schema auto-fill defaults, then diff the manual-required keys.

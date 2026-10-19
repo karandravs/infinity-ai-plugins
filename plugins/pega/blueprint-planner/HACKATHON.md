@@ -24,13 +24,17 @@ Telecom·Service Order, Retail·Returns) × 7 blueprint-shaped goals
 (case type · data model · **API SOR integration** · decision · correspondence · SLA · UI):
 
 ```
-35 goals · PRIMARY-ROUTE STABILITY 100% (35/35) · set-stability 100% (35/35)
-plans gated required-keys-present: 40 · plans with references to fill: 5
+35 goals · PRIMARY-ROUTE STABILITY 100% (35/35) · set-stability 100% (35/35) · avgFit 0.39
+plans gated required-keys-present: 40 · plans with references to fill: 10
 per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · Retail 7/7
 
 + SOR integration chain (eval/eval-integration.md) — 4 industries × 4 steps
   (REST connector → request transform → response transform → data page):
-  16 goals · routed 16/16 · expected-family match 16/16 · gated 16/16 · refs 17 · avgFit 0.46
+  16 goals · routed 16/16 · expected-family match 16/16 · gated 16/16 · refs 17 · avgFit 0.49
+
++ The WHOLE blueprint backlog, offline (eval/backlog-proof.md) — all 40 stories →
+  plan → the ordered `create-rule` calls, with no live environment:
+  40/40 planned · 40/40 composed · verify PASS 40/40
 
 + Blueprint layer, offline (eval/blueprint-proof.md + `blueprint/verify-blueprint.mjs`) —
   recipes parse, refs resolve, selectors well-formed, the create→complete chain covers 7/7 sections,
@@ -57,8 +61,12 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 - **Access** authoring (persona case/data access) is **not exposed** by the plugin → a **human step**.
 - Some rules are **version/corpus-dependent** (`resources/<ver>/`); set `PEGA_CORPUS` to match.
 - The **integration chain** routes + gates 16/16 and is now **grounded on the contracts** — the SOR the
-  goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.46; weak-fit 1/16 —
+  goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.49; weak-fit 1/16 —
   one connector whose noul is intrinsically low) — we publish the numbers rather than hide them.
+- **All 40 backlog stories plan + compose**, but 12 hit a **kind-coverage gap**: the corpus has no family
+  for email-account/SSO/access-control goals, so the planner authors a *structurally valid* rule that isn't
+  the right one. The `verify PASS 40/40` is **near-tautological** (the planner only composes rules whose
+  `verify` it set) — the honest signals are *planned/composed* and this gap, both stated in the doc.
 - Blueprint behaviour that needs a **live browser** (selectors matching the real DOM, login/import) is
   **not** among the offline asserts — the verifier says so instead of pretending.
 

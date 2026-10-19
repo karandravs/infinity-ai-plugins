@@ -46,10 +46,11 @@ node eval/eval-plan.mjs              # 35 goals × 5 industries
 node eval/eval-integration.mjs       # 16 goals: connector→transforms→data page
 node blueprint/verify-blueprint.mjs  # 15 asserts over the blueprint recipes (offline)
 ```
-Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%**, gated plans,
-per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16, avgFit 0.46**;
-`eval/blueprint-proof.md` → the blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family);
-and `eval/build-path.md` → the exact `create-rule` calls, composed **offline** (no live env needed).
+Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%, avgFit 0.39**, gated plans,
+per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16, avgFit 0.49**;
+`eval/backlog-proof.md` → **all 40 stories planned + composed offline**; `eval/blueprint-proof.md` → the
+blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family); and `eval/build-path.md` →
+the exact `create-rule` calls, composed **offline** (no live env needed).
 
 ---
 ### The line to end on
