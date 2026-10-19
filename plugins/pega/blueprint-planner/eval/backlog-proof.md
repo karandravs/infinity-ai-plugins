@@ -1,6 +1,6 @@
 # Blueprint backlog — offline proof (Blueprint → Plan → Build)
 
-Generated 2026-10-19T04:03:46.868Z. Planner: `plan_pega_build` (Jev-backed), story title as the goal. For every story this proves the **whole offline chain**: it is **planned** (>=1 authorable rule), **composed** (the exact ordered `create-rule` calls are built, with blanks filled the way `harness/dryrun-build.mjs` does), and **verified** (each rule PASSes its `verify` gate, `required-keys-present`). **No Pega environment is contacted and no rule is created.**
+Generated 2026-10-19T05:53:45.620Z. Planner: `plan_pega_build` (Jev-backed), story title as the goal. For every story this proves the **whole offline chain**: it is **planned** (>=1 authorable rule), **composed** (the exact ordered `create-rule` calls are built, with blanks filled the way `harness/dryrun-build.mjs` does), and **verified** (each rule PASSes its `verify` gate, `required-keys-present`). **No Pega environment is contacted and no rule is created.**
 
 **Branch:** `build_on` (from `pega.config.json`). Reproduce with `node harness/eval-backlog.mjs` (see bottom).
 
@@ -24,31 +24,31 @@ Generated 2026-10-19T04:03:46.868Z. Planner: `plan_pega_build` (Jev-backed), sto
 | US-10 | Configure step - Acknowledge Request | step | 2 | PASS (2/2) | yes | obj-activity, obj-flowaction |
 | US-11 | Configure step - Retrieve Records | step | 2 | PASS (2/2) | yes | service-mcp, obj-activity |
 | US-12 | Configure step - Contact Counterparty | step | 2 | PASS (2/2) | yes | obj-flowaction, service-mcp |
-| US-13 | Configure step - Suspect Fraud | step | 2 | PASS (2/2) | yes | service-mcp, obj-flowaction |
+| US-13 | Configure step - Suspect Fraud | step | 2 | PASS (2/2) | yes | service-mcp, obj-activity |
 | US-14 | Configure step - Request Evidence | step | 2 | PASS (2/2) | yes | obj-flowaction, service-mcp |
-| US-15 | Configure step - Determine Outcome | step | 1 | PASS (1/1) | yes | service-mcp |
-| US-16 | Configure step - Refund Initiate | step | 2 | PASS (2/2) | yes | service-mcp, obj-flowaction |
+| US-15 | Configure step - Determine Outcome | step | 2 | PASS (2/2) | yes | service-mcp, obj-activity |
+| US-16 | Configure step - Refund Initiate | step | 2 | PASS (2/2) | yes | obj-flowaction, service-mcp |
 | US-17 | Configure step - Customer Notification | step | 2 | PASS (2/2) | yes | notification, obj-corr |
 | US-18 | Configure step - Process Refund | step | 3 | PASS (3/3) | yes | obj-flowaction, obj-casetype, obj-activity |
 | US-19 | Configure step - Confirm Satisfaction | step | 1 | PASS (1/1) | yes | service-mcp |
 | US-20 | Configure step - Quality Review | step | 1 | PASS (1/1) | yes | service-mcp |
 | US-21 | Configure step - Close Case | step | 2 | PASS (2/2) | yes | obj-flowaction, obj-casetype |
-| US-22 | Configure UX - Customer Account | ux | 1 | PASS (1/1) | yes | ui-view |
+| US-22 | Configure UX - Customer Account | ux | 2 | PASS (2/2) | yes | obj-flowaction, ui-view |
 | US-23 | Configure Data Model - Customer Account | data-model | 2 | PASS (2/2) | yes | obj-class, obj-property |
-| US-24 | Configure UX - Dispute Record | ux | 2 | PASS (2/2) | yes | ui-view, obj-flowaction |
+| US-24 | Configure UX - Dispute Record | ux | 1 | PASS (1/1) | yes | ui-view |
 | US-25 | Configure Data Model - Dispute Record | data-model | 2 | PASS (2/2) | yes | obj-class, obj-property |
 | US-26 | Configure UX - Risk Assessment | ux | 1 | PASS (1/1) | yes | service-mcp |
 | US-27 | Configure Data Model - Risk Assessment | data-model | 2 | PASS (2/2) | yes | obj-class, obj-property |
 | US-28 | Configure UX - Contact Profile | ux | 1 | PASS (1/1) | yes | ui-view |
 | US-29 | Configure Data Model - Contact Profile | data-model | 2 | PASS (2/2) | yes | obj-property, obj-class |
 | US-30 | Configure UX - Payment Transaction | ux | 2 | PASS (2/2) | yes | obj-flowaction, ui-view |
-| US-31 | Configure Data Model - Payment Transaction | data-model | 2 | PASS (2/2) | yes | obj-property, obj-class |
+| US-31 | Configure Data Model - Payment Transaction | data-model | 2 | PASS (2/2) | yes | obj-class, obj-property |
 | US-32 | Configure Case Access for Customer | access | 1 | PASS (1/1) | **NO** (access) | obj-flowaction |
 | US-33 | Configure Data Access for Customer | access | 2 | PASS (2/2) | **NO** (access) | service-mcp, declare-pages |
 | US-34 | Configure Case Access for Dispute Analyst | access | 1 | PASS (1/1) | **NO** (access) | service-mcp |
 | US-35 | Configure Data Access for Dispute Analyst | access | 1 | PASS (1/1) | **NO** (access) | service-mcp |
 | US-36 | Configure Case Access for Finance Approver | access | 1 | PASS (1/1) | **NO** (access) | obj-casetype |
-| US-37 | Configure Data Access for Finance Approver | access | 1 | PASS (1/1) | **NO** (access) | declare-pages |
+| US-37 | Configure Data Access for Finance Approver | access | 1 | PASS (1/1) | **NO** (access) | obj-property |
 | US-38 | Configure Case Access for Operations Administrator | access | 1 | PASS (1/1) | **NO** (access) | service-mcp |
 | US-39 | Configure Data Access for Operations Administrator | access | 1 | PASS (1/1) | **NO** (access) | service-mcp |
 | US-40 | Configure Case Access for System Integration User | access | 1 | PASS (1/1) | **NO** (access) | service-mcp |
@@ -68,7 +68,7 @@ None — every story planned and composed.
 The corpus has **no matching family** for these story kinds, so the planner substituted an unrelated rule family: the composed rule verifies structurally but does **not** do what the story asks (e.g. an SSO config story authored as a flow action). This is the most common real gap in this run.
 
 - kind `config` (2): US-1, US-2 → substituted `obj-corr, obj-flowaction`
-- kind `access` (10): US-32, US-33, US-34, US-35, US-36, US-37, US-38, US-39, US-40, US-41 → substituted `obj-flowaction, service-mcp, declare-pages, obj-casetype`
+- kind `access` (10): US-32, US-33, US-34, US-35, US-36, US-37, US-38, US-39, US-40, US-41 → substituted `obj-flowaction, service-mcp, declare-pages, obj-casetype, obj-property`
 
 ### Capability not in the corpus — the planner's own `coverage` flag
 

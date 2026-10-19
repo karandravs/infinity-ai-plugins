@@ -30,6 +30,13 @@ Two MCPs do the work: **`pega-plan`** (goal → plan: rules, build order, payloa
    On rejection, apply the platform truth or record the reason.
 7. **Record & continue.** Per story: what built, what failed and why → next story.
 
+## Coverage — an uncovered goal is a human step
+Every `plan_pega_build` result carries a top-level **`coverage`** (`{ covered, capability, phrase, reason }`)
+and a **`caveats[]`**. **`covered:false`** means *no authoring rule family in the corpus declares the goal's
+capability* (e.g. "Configure Email Account", "Configure SSO", access control): routing still returns a
+structurally-valid rule, but it cannot do the job. So **flag the goal for a human — do not build it** (the
+same message is repeated in `caveats[]`). `covered:true` builds as normal.
+
 ## Boundaries — report, don't force
 - **`access` stories** (persona case/data access): Pega's plugin doesn't expose access authoring →
   **human step**. Report and skip.

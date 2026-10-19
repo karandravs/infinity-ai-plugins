@@ -216,20 +216,37 @@ export function pathParameters(path) {
     .map(seg => ({ pyParameterName: seg, pyMapFrom: "CONSTANT", pyMapFromKey: seg, pyEmptyBehavior: "REQUIRED", pyEncoding: "URL" }));
 }
 
+// Words every SOR contract's TITLE shares — the product-type tail. They name the PROTOCOL/kind of
+// thing, not the system of record, so they must never select a contract: without dropping them a goal
+// that names NO SOR ("calls the external API to fetch data") matches EVERY contract on "API" and wins
+// alphabetically (→ `crm`). Dropped from the match set alongside the contract's own title stopwords.
+const CONTRACT_STOP = new Set(["api", "apis", "rest", "service", "services", "data", "system", "systems", "external", "sor", "platform", "application", "doc", "json"]);
+
 // which contract describes the goal's system of record? Match whole words from the contract's file
-// stem and title against the goal (word boundaries, so "risk" never matches "brisk"). No match →
-// null and the caller keeps its supplied/default base URL.
+// stem and title against the goal. A contract is only eligible on a SOR-SPECIFIC token (generic
+// title words above are stripped), and the winner must be DISCRIMINATIVE: its longest matched token
+// beats every other contract's (an equal-length tie is ambiguous → null, so we never pick
+// alphabetically). No match → null and the caller keeps its supplied/default base URL.
 export function matchContract(goal, contracts) {
-  const g = ` ${String(goal || "").toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
-  let best = null, bestScore = 0;
+  // whole-token presence, treating a HYPHENATED compound as one token: the "risk" inside "high-risk"
+  // (a domain adjective) is not the Risk API, while " calls the risk API " is. Word boundaries keep
+  // "risk" from matching "brisk".
+  const g = String(goal || "").toLowerCase();
+  const scored = [];
   for (const c of contracts || []) {
-    const toks = new Set([...c.stem.split(/[^a-z0-9]+/i), ...c.title.split(/[^a-z0-9]+/i)]
-      .filter(t => t.length >= 3).map(t => t.toLowerCase()));
-    let score = 0;
-    for (const t of toks) if (g.includes(` ${t} `)) score++;
-    if (score > bestScore) { bestScore = score; best = c; }
+    const toks = new Set([...String(c.stem || "").split(/[^a-z0-9]+/i), ...String(c.title || "").split(/[^a-z0-9]+/i)]
+      .map(t => t.toLowerCase()).filter(t => t.length >= 3 && !CONTRACT_STOP.has(t)));
+    let bestLen = 0;
+    for (const t of toks) {
+      const re = new RegExp(`(?<![a-z0-9-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9-])`);
+      if (re.test(g) && t.length > bestLen) bestLen = t.length;
+    }
+    if (bestLen > 0) scored.push({ c, bestLen });
   }
-  return bestScore > 0 ? best : null;
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.bestLen - a.bestLen);
+  if (scored[1] && scored[1].bestLen === scored[0].bestLen) return null; // ambiguous tie → keep default
+  return scored[0].c;
 }
 
 // ---- 4. fill a payload from the goal/contracts (code, no LLM) ----
@@ -253,6 +270,11 @@ export function fillForSkill(skill, template, { baseUrl = DEFAULT_SOR_BASE_URL, 
 // goal, not left borrowed from an unrelated example: a data page "that retrieves transaction data
 // from the payments REST connector" must not source from "GetProduct", and a connector "that calls
 // the payments API to look up a transaction" must expose the contract's transaction path.
+// KNOWN EDGE (documented, not fixed): each reference is derived from THIS rule's goal, so a
+// data page's pyConnectorName ("RetrievesTransactionPayments") does not equal the connector rule's
+// own derived name. The chain is planned one rule per planPegaBuild call, so a call cannot see the
+// other rule's name; cross-linking would need cross-call state the stateless tool deliberately
+// does not keep. The names are surfaced as `reference` blanks for the caller to reconcile.
 const REFERENCE_NAME_SUFFIX = { pyConnectorName: "", pyReqDataTransform: "Request", pyResDataTransform: "Response", pyDTName: "Transform" };
 // a rule's class is the example's placeholder namespace with a GOAL-derived type segment, so the
 // rule stops claiming to be about "APIResource"/"MyDataType". Pega system classes are never rehomed.
@@ -701,7 +723,17 @@ export async function corpusVocabulary() {
   return (_coverageVocab = { text: decl.join("\n").toLowerCase(), acronyms });
 }
 
-// the coverage verdict for a goal against the vocabulary (pure; the caller supplies the vocabulary).
+// The coverage signal for a goal against the vocabulary (pure; the caller supplies the vocabulary).
+// This is a CONSERVATIVE FLAG, not a verdict on whether the corpus can do the job — it can only
+// report that the goal's capability NOUN is absent from the vocabulary the corpus declares. Read
+// `covered: false` as "a human should look", never as "no family fits"; `covered: true` only means
+// the noun appeared somewhere in the declared prose, not that a correct family exists. Two edges
+// make it one-sided:
+//   * an empty capability phrase (e.g. an imperative-only goal like "Configure …") has no noun to
+//     check → treated as COVERED. Silence is not evidence of a gap.
+//   * the vocabulary is built from rules-rule-* authoring families only (see corpusVocabulary), so a
+//     capability that a methodology-* doc or a runtime concept covers is invisible here.
+// It changes neither routing nor goalFit/verify; the caller mirrors a negative into `caveats[]`.
 export function coverageFor(goal, vocab) {
   const phrase = goalCapability(goal);
   const head = goalCapabilityHead(goal);
@@ -884,7 +916,11 @@ const BLANK_LEAF = /(PropertiesName|PropertiesValue|Message|Description|Subject|
 const REFERENCE_LEAF = /(pyValidateActivity|pyLocalActionActivity|pyPreProcessingActivity|pyPreProcessingTransformRule|pyActionTransformRule|pyWhenRule|pyActionWhen|pyIntegrationSystemId|pyActivityName|pyStreamName|pyFlowName|pyHandlerFlow|pyAuthenticationProfile|pyAuthenticationProfileForSetting|pyModelName|pyImplementation|pyExpression|pyConnectorName|pyReqDataTransform|pyResDataTransform|pyDTName|pyPostActivity|pyLoadActivity)$/;
 // keys whose value IS this rule's own name — a reference only when NESTED (an APPLY_MODEL row's
 // pyModelName names a different data transform; the rule-root pyModelName names this one).
-const SELF_NAME_KEYS = new Set(["pyRuleName", "pyLabel", "pyServiceName", "pyModelName", "pyPageName", "pyActivityName", "pyStreamName", "pyPurpose", "pyEmailTemplateName"]);
+// pyFlowName belongs here defensively: it names a flow, and on a case type it appears only NESTED
+// (pyStages[].pyProcesses[].pyFlowName, which groundCaseTypeStages renames to the stage's label), so
+// a top-level value would be this rule's own identity. No authoring family carries a top-level
+// pyFlowName (checked: rules-rule-obj-casetype is the only schema declaring it, and only nested).
+const SELF_NAME_KEYS = new Set(["pyRuleName", "pyLabel", "pyServiceName", "pyModelName", "pyPageName", "pyActivityName", "pyStreamName", "pyPurpose", "pyEmailTemplateName", "pyFlowName"]);
 
 // code generates candidate NAMES; Jev picks the best for the goal (Jev cannot write text, only select)
 export function nameCandidates(goal, templateLabel) {
@@ -1119,6 +1155,17 @@ export async function fillPlan(result, values) {
 }
 
 
+// Normalise a caller-approved write directory: trim, reject NUL bytes and an explicit `..` segment
+// (path traversal), and collapse "." / duplicate separators via resolve. Returns null when no
+// out_dir was given, so the caller falls back to a fresh temp directory.
+export function normalisedOutDir(outDir) {
+  if (outDir == null || String(outDir).trim() === "") return null;
+  const raw = String(outDir).trim();
+  if (raw.includes("\0")) throw new Error(`invalid out_dir: ${JSON.stringify(outDir)}`);
+  if (raw.split(/[\\/]+/).includes("..")) throw new Error(`invalid out_dir (path traversal): ${JSON.stringify(outDir)}`);
+  return path.resolve(raw);
+}
+
 // ---- main ----
 export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_url = DEFAULT_SOR_BASE_URL, namespace, expand = false, values }) {
   // read contracts first (methods inform both routing and example choice)
@@ -1234,9 +1281,13 @@ export async function planPegaBuild({ query, out_dir, contracts_dir, sor_base_ur
     planId: planIdFor({ query, namespace, expand, contracts_dir }),
     plans,
   };
-  if (out_dir) { await mkdir(out_dir, { recursive: true }); }
-  const dir = out_dir || await mkdtemp(path.join(os.tmpdir(), "pega-plan-"));
-  const outPath = path.join(dir, "pega-plan.json");
+  // the write target is the tool's contract: a directory the caller approved. Normalise it (collapse
+  // "." and duplicate separators) and refuse an explicit `..` segment — the artifact must not be
+  // nudged outside the intended tree. Omitted/blank → a fresh temp dir.
+  const dir = normalisedOutDir(out_dir);
+  const target = dir || await mkdtemp(path.join(os.tmpdir(), "pega-plan-"));
+  if (dir) await mkdir(dir, { recursive: true });
+  const outPath = path.join(target, "pega-plan.json");
   result.outPath = outPath;
   await writeFile(outPath, JSON.stringify(result, null, 2));
   savePlan(result.planId, result); // FREEZE: the 2nd call loads this exact plan

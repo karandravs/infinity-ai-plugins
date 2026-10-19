@@ -24,8 +24,8 @@ Telecom·Service Order, Retail·Returns) × 7 blueprint-shaped goals
 (case type · data model · **API SOR integration** · decision · correspondence · SLA · UI):
 
 ```
-35 goals · PRIMARY-ROUTE STABILITY 100% (35/35) · set-stability 100% (35/35) · avgFit 0.39
-plans gated required-keys-present: 40 · plans with references to fill: 10
+35 goals · PRIMARY-ROUTE STABILITY 100% (35/35) · set-stability 100% (35/35) · avgFit 0.41
+plans gated required-keys-present: 40 · plans with references to fill: 11
 per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · Retail 7/7
 
 + SOR integration chain (eval/eval-integration.md) — 4 industries × 4 steps
@@ -79,3 +79,8 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 It's a **fork, not a rewrite** (one layer on the official plugin); it's **measurable** (stability,
 gate, goalFit) and **hill-climbed on real platform feedback**; and it draws a **clean boundary** —
 planning is ours, *building is the agent's*.
+
+`npm test` → **44 checks** (keyless-safe; CI runs the offline blueprint proof too).
+
+**Presenting it:** [`SLIDES.md`](SLIDES.md) (the deck) · [`DEMO.md`](DEMO.md) (the 3-minute script) ·
+[`eval/`](eval/) (the proof artifacts).
