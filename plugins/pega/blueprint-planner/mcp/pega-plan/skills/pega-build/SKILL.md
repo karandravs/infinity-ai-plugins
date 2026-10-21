@@ -39,8 +39,13 @@ don't write files or shell.
      clauses are `yes`/`alternative`: build **the steps of the `yes`/`alternative` clauses** (their
      numbers are in `clauses[].steps`) and stop at the `unsure` one. An `unsure` or `no` clause
      contributes **no steps** of its own. `closest` names the candidates or what would resolve it —
-     usually a sharper question.
-   `looked_at` is the trail (every family considered, with its score/margin and whether it was used);
+     usually a sharper question. A structural **prerequisite or dependent of the winning family is a
+     complement, never a competing candidate**: it is part of the same answer (and already a step), so
+     its routing score cannot make a clause `unsure`. The candidates an `unsure` names are unrelated
+     families.
+   `looked_at` is the trail (every family considered, with its score/margin, whether it was used, and
+   its `role` — `candidate`, or `prerequisite`/`dependent` when it is a structural complement of the
+   winner and therefore was not weighed as a competitor);
    `provenance` is the corpus version, the pinned model, the registry version, the routing sample
    count and the measured `timing_ms`. Neither changes the answer — quote them when you report one.
 4. **Read the `steps[]`, in order.** Each step has `n`, a `title`, `rule` (family, skill, example,

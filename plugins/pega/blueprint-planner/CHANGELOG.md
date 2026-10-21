@@ -24,7 +24,7 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
 - Routing stability → **100%** on the **legacy per-goal path** (`planPegaBuild`/`routeSkills`, 3
   averaged samples per goal): the correct rule-authoring family was selected for every probed goal.
   The **shipped** `plan_pega_change` path spends **1 batched sample** for the whole question, so a
-  question sitting near the cutoff can flip between runs — `eval/head-to-head.md` names the
+  question sitting near the cutoff can flip between runs — `docs/head-to-head.md` names the
   near-cutoff questions it had to replace instead of pinning one question to one class.
 - Rule content is **goal-derived**: composed values/text come from the goal — code *selects* enum
   values (the value the goal names, else the family's example) and code *composes* the free text; the
@@ -35,14 +35,26 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
   corpus-discovery smoke.
 
 ### Added
-- **`eval/demo-transcript.md`** — five Pega how-to questions answered end to end (verdict, steps,
-  closest, inputs) by `plan_pega_change`; **`eval/head-to-head.md`** — planner vs the plugin baseline
+- **`docs/demo-transcript.md`** — five Pega how-to questions answered end to end (verdict, steps,
+  closest, inputs) by `plan_pega_change`; **`docs/head-to-head.md`** — planner vs the plugin baseline
   on the same questions, with computed baseline metrics.
 - **Offline proof scripts** (deterministic, no Pega environment): `harness/eval-integration.mjs` (SOR
   integration chain plans end-to-end), `harness/eval-backlog.mjs` (whole Blueprint backlog through
   plan → compose → verify), `harness/eval-mcp.mjs` (the shipped MCP over the real stdio protocol),
   `harness/dryrun-build.mjs` (the exact `create-rule` calls the build path would make) and
   `blueprint/verify-blueprint.mjs` (the Blueprint recipe-layer contract).
+
+### Fixed
+- **A structural prerequisite is a complement, not a competing candidate.** A clause that routed its
+  own prerequisite inside the near-cutoff band flipped to `unsure` on a plan it could build — e.g.
+  "How do I create a case type with an SLA and an approval step?" routed `obj-casetype` 0.90
+  (margin 0.11) **and** `obj-class` 0.76 (margin −0.03), and `obj-class` is the case type's
+  structural prerequisite that the planner already emits as step 1. `prereq-lib` now exposes
+  `structuralClosure(family)` (the family + what it needs + what needs it, one level each way) and the
+  answer assembly excludes those complements from the ambiguity comparison — they stay in
+  `looked_at.families` with `role: "prerequisite" | "dependent"`, and step building is unchanged.
+  `decide()` stays generic: two **unrelated** families inside the band are still `unsure` (the
+  flagship's `declare-pages` vs `service-mcp` clause 3 is untouched).
 
 > **Superseded by the `plan_pega_change` contract above** (kept for the record, not as current
 > behaviour): the top-level `coverage` flag and its `caveats[]` entry, the `covered:false` ⇒
