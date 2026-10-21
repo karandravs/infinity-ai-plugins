@@ -15,7 +15,11 @@ don't write files or shell.
 - **You supply the target.** The active Change Request (and the branch it implies) is yours to pick
   in the Authoring MCP. The planner names no branch and no CR — that is deliberate, not an omission.
 - **One question at a time.** One call, one question; several goals in one question still answer as
-  one question. Never bulk-ask the backlog.
+  one question. Never bulk-ask the backlog. The question is split into **one clause per goal**, and
+  the splitter is conservative: an `and`/`,` inside a relative clause ("a decision table **that routes
+  claims by risk band and amount**") belongs to that clause, and a fragment that cannot stand as a
+  goal ("amount") is merged back rather than asked about on its own. Write the goals as separate
+  sentences if you want them counted separately.
 - **The answer is the contract.** Trust the structure and the verdict; you supply what it says it
   owes you. Every payload is a **DRAFT** until the platform validator accepts it.
 
@@ -41,8 +45,12 @@ don't write files or shell.
      contributes **no steps** of its own. `closest` names the candidates or what would resolve it —
      usually a sharper question. A structural **prerequisite or dependent of the winning family is a
      complement, never a competing candidate**: it is part of the same answer (and already a step), so
-     its routing score cannot make a clause `unsure`. The candidates an `unsure` names are unrelated
-     families.
+     its routing score cannot make a clause `unsure`. A near-tie is likewise **broken by the words**:
+     when the clause names one family by its own artefact words (`flow`, `case type`, `connector`,
+     `decision table`, `SLA`, `property`, `view`, `notification`, `class`, …) and says nothing that
+     names the near runner-up, the named family wins and the clause is not `unsure`. The candidates an
+     `unsure` names are unrelated families the clause does **not** name — "a CRM lookup" is the
+     canonical case, and it stays `unsure`.
    `looked_at` is the trail (every family considered, with its score/margin, whether it was used, and
    its `role` — `candidate`, or `prerequisite`/`dependent` when it is a structural complement of the
    winner and therefore was not weighed as a competitor);

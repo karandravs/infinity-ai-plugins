@@ -22,6 +22,8 @@
 //        the clause names a capability                               → no  (positive absence)
 //   3. any routed family AT/ABOVE THE ROUTING FLOOR within NEAR_CUTOFF
 //      of the cutoff (R18: a sub-floor family is not a candidate)  → unsure
+//      …unless the clause NAMES the winner and not the near family: the words already decided it
+//      (namedFamilyWins), so a named family cannot lose a near-tie to an unnamed one
 //   4. the best-routed family has no schema or no example            → unsure
 //   5. the top two candidates are tied within TIE **and disagree on
 //      authorability** (so the tie decides the verdict)              → unsure
@@ -157,6 +159,100 @@ export function familyNoun(family) {
   return bare ? `the ${bare} family` : "a routed family";
 }
 
+// ---- LEXICAL SUPPORT: does the clause NAME this family? ----
+// The router works in FAMILY names ("obj-flow", "declare-pages"); a user writes the ARTEFACT ("flow",
+// "decision table", "SLA"). This table is the bridge between the two, and it exists for exactly ONE
+// decision: breaking a near-tie (precedence row 3). A family the clause names by its own words is not
+// in a coin flip with a family the clause does not name.
+//
+// The table is deliberately CURATED and conservative: an unlisted family has no lexical forms, so a
+// tie involving it stays a tie. Over-claiming support would silently erase genuine ambiguity, which
+// is the failure this table is meant to avoid, not create.
+const FAMILY_LEXICAL = {
+  "obj-flow": ["flow", "flows"],
+  "obj-flowaction": ["flow action", "flow actions"],
+  "obj-casetype": ["case type", "case types", "casetype", "work type", "work types"],
+  "connect-rest": ["rest", "rest connector", "rest service", "connector"],
+  "connect-soap": ["soap", "soap connector", "soap service"],
+  "connect-sql": ["sql", "sql connector"],
+  "connect-generativeai": ["generative ai", "genai"],
+  "declare-pages": ["data page", "data pages"],
+  "declare-decision-table": ["decision table", "decision tables"],
+  "decision-dataset": ["decision data set", "data set", "decision dataset"],
+  "obj-servicelevel": ["service level", "service levels", "sla", "slas", "service level agreement", "service-level agreement"],
+  "obj-property": ["property", "properties"],
+  "obj-class": ["class", "classes"],
+  classmetadata: ["class", "classes"],
+  "obj-model": ["data transform", "data transforms"],
+  "obj-activity": ["activity", "activities"],
+  "obj-corr": ["correspondence", "correspondence rule", "correspondence rules"],
+  corrtype: ["correspondence type", "correspondence types"],
+  notification: ["notification", "notifications"],
+  "ui-view": ["view", "views", "ui view", "ui views"],
+  "ui-theme": ["theme", "themes"],
+  "obj-report-definition": ["report definition", "report definitions", "report"],
+  "obj-validate": ["validation", "validate"],
+  "edit-validate": ["edit validate", "edit validation"],
+  "obj-when": ["when condition", "when rule"],
+  "obj-fieldvalue": ["field value", "field values"],
+  "obj-attachmentcategory": ["attachment category"],
+  "service-mcp": ["mcp service", "service mcp"],
+  "ai-agent": ["ai agent", "ai agents"],
+  "ai-tool": ["ai tool", "ai tools"],
+  "async-jobscheduler": ["job scheduler", "scheduled job", "scheduler"],
+  "async-queueprocessor": ["queue processor"],
+  "ruleset-version": ["ruleset version"],
+  "ruleset-branch": ["ruleset branch"],
+  "ruleset-name": ["ruleset name", "ruleset"],
+  "test-unit-case": ["unit test", "pegaunit test"],
+  "test-application-case": ["application test", "end-to-end test"],
+};
+
+const ARTICLE = /^(?:a|an|the)\s+/i;
+// Compare in one normal form: case, hyphens/underscores/slashes as spaces, one space between words.
+// "service-level agreement" and "service level agreement" are the same phrase to a reader.
+const normaliseWords = (text) => str(text).toLowerCase().replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const phraseIn = (form, text) => new RegExp(`(?<![a-z0-9])${escapeRe(form)}(?![a-z0-9])`).test(text);
+
+// Memoised: the forms of a family never change, and familyNamedIn runs per candidate per clause.
+const _familyForms = new Map();
+export function familyLexicalForms(family) {
+  const bare = str(family).replace(/^rules-rule-/, "");
+  if (_familyForms.has(bare)) return _familyForms.get(bare);
+  const forms = new Set([normaliseWords(bare)]); // a caller that names the family verbatim
+  for (const form of FAMILY_LEXICAL[bare] || []) forms.add(normaliseWords(form));
+  // the artefact noun is the same table the `unsure` text uses, so the two cannot drift
+  if (FAMILY_NOUN[bare]) forms.add(normaliseWords(FAMILY_NOUN[bare].replace(ARTICLE, "")));
+  const out = [...forms].filter((form) => form.length > 2);
+  _familyForms.set(bare, out);
+  return out;
+}
+
+// → true when the clause text contains one of the family's own artefact words as a whole phrase.
+export function familyNamedIn(text, family) {
+  const t = normaliseWords(text);
+  if (!t) return false;
+  return familyLexicalForms(family).some((form) => phraseIn(form, t));
+}
+
+// A NEAR-TIE BETWEEN A NAMED FAMILY AND AN UNNAMED ONE IS NOT A TIE (precedence row 3).
+// Row 3 exists because two candidates that both fit make the answer a coin flip — but only when the
+// clause does not SAY which one it means. When the clause names the top family by its own words
+// ("…an approval flow where…") and says nothing that names the near runner-up, the answer is the
+// named one: the wobble in the unnamed family's margin is not a disagreement about what to build.
+// Three guards keep the genuine ambiguity intact (the flagship's "a CRM lookup"):
+//   * BOTH sides must be decided by the words — top named, near family NOT named;
+//   * the near family must not BE the top: a top sitting on the cutoff is a near-threshold signal in
+//     its own right, and naming it does not make it a hit;
+//   * row 5 (a tie that decides AUTHORABILITY) is untouched: whether the runner-up can be composed
+//     is a fact about the corpus that the clause's wording does not change.
+function namedFamilyWins(text, top, near) {
+  if (!top || !near) return false;
+  if (str(near.family) === str(top.family)) return false;
+  return familyNamedIn(text, top.family) && !familyNamedIn(text, near.family);
+}
+
 // The competing candidates an `unsure` clause must name: the artefacts its routed families author,
 // each with its family name so the reader can act on it. Ordered by routing score (the input order).
 function candidateText(routed) {
@@ -211,8 +307,10 @@ function decideClause(clause, registry) {
   //    candidates whose selection could flip. A routed family that does not report a margin is
   //    treated as sitting ON the cutoff (0), not as safely clear of it. The candidates are NAMED
   //    (R14): "a CRM lookup could be a connector or a data page".
-  const near = routed.find((r) => num(r.margin, 0) < NEAR_CUTOFF);
-  if (near) {
+  //    EXCEPT when the clause NAMES the winner (namedFamilyWins): a near-tie between a family the
+  //    clause names and one it does not is not a coin flip — the words already decided it.
+  const near = ranked.find((r) => num(r.margin, 0) < NEAR_CUTOFF);
+  if (near && !namedFamilyWins(text, top, near)) {
     const cands = candidateText(routed);
     const what = cands.length > 1
       ? `a clearer statement of the goal — this clause could be ${cands.slice(0, 4).join(" or ")}; name which one it needs`

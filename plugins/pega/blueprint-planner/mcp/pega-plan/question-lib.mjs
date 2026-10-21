@@ -13,6 +13,14 @@
 //   * a comma is a clause boundary only when what follows can START a clause (article, digit, or
 //     an authoring verb). "intake, investigation, and resolution" is one noun-phrase list, not three
 //     goals; "add a view, then configure an SLA" and "add a view, and an SLA" are two goals.
+//
+// Two more, learned from the 10-story set:
+//   * a RELATIVE CLAUSE is one clause. "a decision table that routes claims by risk band and amount"
+//     names ONE goal — the "and" joins two routing inputs inside the relative clause, not two goals
+//     — so a boundary inside a relative pronoun + verb is refused (insideRelativeClause).
+//   * a FRAGMENT is never a goal. A split that leaves one word ("amount") or a verb-less phrase with
+//     no determiner to head it is the splitter's own artefact, so it merges back into the clause
+//     before it (mergeFragments). A determiner-led phrase ("an SLA") is a goal and stays one.
 
 const WHITESPACE = /\s+/g;
 const TRAILING_PUNCT = /[\s?.!,;:]+$/;
@@ -86,6 +94,42 @@ function gerundForms(verb) {
   return forms;
 }
 
+// ---- verb-ish tokens: the ONE part-of-speech fact this file needs ----
+// Splitting and merging ask the same question: does this text contain a verb? There is no tagger
+// here, so the answer comes from the closed list above plus its regular inflections ("routes",
+// "approved", "mapping") and the closed class of copulas/auxiliaries. A word outside the set is NOT
+// treated as a verb — which is exactly what lets "amount" read as the bare noun it is.
+const COPULAS = [
+  "be", "am", "is", "are", "was", "were", "been", "being", "have", "has", "had", "having",
+  "do", "does", "did", "done", "can", "could", "will", "would", "shall", "should", "may", "might",
+  "must", "need", "needs", "want", "wants", "get", "gets", "go", "goes", "let", "lets", "allow",
+  "allows", "require", "requires", "contain", "contains", "include", "includes", "keep", "keeps",
+  "hold", "holds", "carry", "carries",
+];
+const VERBISH = new Set(COPULAS);
+for (const verb of AUTHORING_VERBS) for (const form of verbForms(verb)) VERBISH.add(form);
+
+// the regular inflections a user actually writes: routes / approved / mapping / applies
+function verbForms(verb) {
+  const forms = new Set([verb]);
+  if (/(?:s|x|z|ch|sh)$/.test(verb)) forms.add(verb + "es");
+  else if (/[^aeiou]y$/.test(verb)) forms.add(verb.slice(0, -1) + "ies");
+  else forms.add(verb + "s");
+  if (/e$/.test(verb)) forms.add(verb + "d");
+  else if (/[^aeiou]y$/.test(verb)) forms.add(verb.slice(0, -1) + "ied");
+  else {
+    forms.add(verb + "ed");
+    if (/[^aeiou][aeiou][^aeiouwxy]$/.test(verb) && verb.length <= 5) forms.add(verb + verb.at(-1) + "ed");
+  }
+  for (const gerund of gerundForms(verb)) forms.add(gerund);
+  return forms;
+}
+
+// → true when the text contains a token that looks like a verb ("routes claims", "is resolved").
+export function hasVerbish(text) {
+  return String(text ?? "").toLowerCase().split(/[^a-z0-9']+/).some((token) => token && VERBISH.has(token));
+}
+
 // "adding a view" -> "add a view": a question wrapped as "go about <gerund>" or "the best practice
 // for <gerund>" still asks for a goal. Only a KNOWN authoring gerund is converted; anything else is
 // left exactly as written.
@@ -151,15 +195,77 @@ function cleanClause(clause) {
   return tidy(text.replace(TRAILING_PUNCT, ""));
 }
 
+// ---- a RELATIVE CLAUSE is one clause ----
+// "a decision table that routes claims by risk band and amount" names ONE goal: the "and" joins two
+// routing INPUTS inside the relative clause, not two goals. A boundary is refused when the text
+// before it holds a relative pronoun followed by a verb — the clause that pronoun opened is still
+// running at the boundary. Two things end it: a comma/semicolon after the pronoun, or a boundary that
+// IS a comma/semicolon (", then configure an SLA" starts a fresh clause, so the split is allowed).
+const RELATIVE_PRONOUN = /\b(?:that|which|who|whom|whose|where)\b/gi;
+const CLAUSE_TERMINATOR = /[,;]/;
+
+function insideRelativeClause(text, boundary) {
+  if (CLAUSE_TERMINATOR.test(boundary[0])) return false;
+  const before = text.slice(0, boundary.index);
+  // the LAST pronoun is the one a boundary could be inside ("a flow where a manager approves …")
+  let last = null;
+  for (const match of before.matchAll(RELATIVE_PRONOUN)) last = match;
+  if (!last) return false;
+  const tail = before.slice(last.index + last[0].length);
+  // "that amount" is a demonstrative, not a relative pronoun: with no verb after it, nothing opened
+  if (!hasVerbish(tail)) return false;
+  return !CLAUSE_TERMINATOR.test(tail);
+}
+
+// ---- a FRAGMENT is never a goal ----
+// A clause that cannot stand as a goal is a fragment: one word ("amount"), or a phrase with no verb
+// and no determiner to head it ("high priority"). The splitter invented it, so it is not a second
+// goal — it merges back into the clause before it. A determiner-led noun phrase is NOT a fragment:
+// "an SLA" is what the user asked for and it inherits the question's verb downstream.
+const FRAGMENT_HEAD = /^(?:a|an|the|this|that|these|those|some|any|every|each|no|\d)/i;
+
+function isFragment(clause) {
+  const words = clause.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return true;
+  return !hasVerbish(clause) && !FRAGMENT_HEAD.test(clause);
+}
+
+// A fragment joins the clause before it; a LEADING fragment has nothing before it, so the first real
+// clause absorbs it — the goal keeps leading with its verb, which is what the router is asked about.
+function mergeFragments(clauses) {
+  const out = [];
+  let leading = "";
+  for (const clause of clauses) {
+    if (!isFragment(clause)) {
+      out.push(leading ? `${clause} and ${leading}` : clause);
+      leading = "";
+    } else if (out.length) {
+      out[out.length - 1] = `${out[out.length - 1]} and ${clause}`;
+    } else {
+      leading = leading ? `${leading} and ${clause}` : clause;
+    }
+  }
+  if (!out.length && leading) out.push(leading); // every clause was a fragment: keep the text
+  return out;
+}
+
 // splitClauses — one question, one clause per goal it names.
 // Always returns ≥1 clause for a non-blank question; a blank question has none.
 export function splitClauses(question) {
   const goal = stripQuestionPrefix(question);
   if (!goal) return [];
   const { masked, spans } = protectQuoted(goal);
-  return masked
-    .split(CLAUSE_BOUNDARY)
-    .map((part) => restoreQuoted(part, spans))
-    .map(cleanClause)
-    .filter((part) => part.length > 0);
+  // boundaries are filtered BEFORE the slice: a match inside a relative clause is not a boundary, and
+  // the text on either side of it must stay together.
+  const parts = [];
+  let start = 0;
+  for (const boundary of masked.matchAll(CLAUSE_BOUNDARY)) {
+    if (insideRelativeClause(masked, boundary)) continue;
+    parts.push(masked.slice(start, boundary.index));
+    start = boundary.index + boundary[0].length;
+  }
+  parts.push(masked.slice(start));
+  return mergeFragments(
+    parts.map((part) => cleanClause(restoreQuoted(part, spans))).filter((part) => part.length > 0)
+  );
 }

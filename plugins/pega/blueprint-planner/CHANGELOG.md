@@ -55,6 +55,29 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
   `looked_at.families` with `role: "prerequisite" | "dependent"`, and step building is unchanged.
   `decide()` stays generic: two **unrelated** families inside the band are still `unsure` (the
   flagship's `declare-pages` vs `service-mcp` clause 3 is untouched).
+- **A relative clause is one goal; a fragment is never a goal.** "How do I create a decision table
+  that routes claims by risk band and amount?" split at the "and" **inside** the relative clause
+  ("that routes … and amount"), leaving `["create a decision table that routes claims by risk band",
+  "amount"]`. `amount` is not a goal: it routed to nothing, came back `unsure`, and the worst-clause
+  merge dragged an answerable question down with it. `splitClauses` now refuses a boundary whose
+  preceding text holds a relative pronoun (`that|which|who|whose|where`) followed by a verb — the
+  clause that pronoun opened is still running — and merges any surviving fragment (one word, or no
+  verb and no determiner to head it) back into the clause before it. A determiner-led phrase like
+  "an SLA" is **not** a fragment: it is what the user asked for. The question above is now ONE clause
+  and answers `yes`; "configure a case type and an SLA" is still two.
+- **A named family does not lose a near-tie to an unnamed one.** "How do I create an approval flow
+  where a manager approves a refund over 500?" routes `obj-flow` 0.72 and `obj-casetype` 0.66 (gap
+  0.06); when the gap landed at 0.04 the case type's margin entered the near-cutoff band and the
+  clause flipped to `unsure`. The clause **names the flow** and says nothing about a case type, so
+  which one it needs is not a coin flip. `verdict-lib` exposes `familyNamedIn(text, family)` (a
+  curated table of the artefact words a user actually writes — `flow`, `case type`, `connector`,
+  `decision table`, `SLA`, `property`, `view`, `notification`, `class`, …) and precedence row 3 is
+  skipped when the clause names the top family and not the near runner-up. Two guards keep the
+  genuine ambiguity: the near family must not **be** the top (a top on the cutoff is still a
+  near-threshold signal), and the flagship's "a CRM lookup" — which names no family — is still
+  `unsure`, as is `declare-pages` vs `service-mcp`. Measured: the approval-flow question is `yes` on
+  5/5 runs, and the email-notification story ("add an email notification when a case is resolved",
+  `notification` 0.79 vs `obj-corr` 0.71) now answers `yes` for the same reason.
 
 > **Superseded by the `plan_pega_change` contract above** (kept for the record, not as current
 > behaviour): the top-level `coverage` flag and its `caveats[]` entry, the `covered:false` ⇒
