@@ -1,13 +1,11 @@
-// graph-lib.mjs — read the corpus skills-graph (nodes/edges/concepts) for routing + build ORDER.
+// graph-lib.mjs — read the corpus skills-graph (nodes/edges/concepts) for routing + READING ORDER.
 // The manifest gives a flat family list; the graph gives RELATEDNESS (SIMILAR), PREREQUISITES
-// (REQUIRES → build order), concept tags, and keywords. We load it, we don't re-derive it.
+// (REQUIRES → reading order), concept tags, and keywords. We load it, we don't re-derive it.
+// REQUIRES is NOT an authoring dependency: structural prerequisites live in prereq-lib.mjs.
 import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { corpusPaths } from "./corpus-lib.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "../..");
-export const GRAPH = process.env.PEGA_GRAPH || path.join(ROOT, "index/pega-infinity-ai-plugins-resources-26-1/graphs/skills-graph.json");
+export const GRAPH = corpusPaths().graph; // discovered + validated at startup (same root as the corpus)
 
 const add = (m, k, v) => { if (!m.has(k)) m.set(k, new Set()); m.get(k).add(v); };
 let _g = null;
@@ -42,7 +40,9 @@ export function familyProfile(name) {
   };
 }
 
-// dependency/build order: within `names`, emit prerequisites before dependents (stable, cycle-safe)
+// reading order: within `names`, emit prerequisites before dependents (stable, cycle-safe). The
+// graph's REQUIRES is a reading relation, so this is presentation order — never a claim that one
+// rule must be authored before another (that is prereq-lib's job).
 export function requireOrder(names) {
   const { requiresOf } = loadGraph();
   const set = new Set(names); const out = []; const done = new Set(); const onStack = new Set();

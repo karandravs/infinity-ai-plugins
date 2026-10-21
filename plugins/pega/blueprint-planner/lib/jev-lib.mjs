@@ -2,7 +2,6 @@
 // Raw HTTP wrapper: POST https://api.typesafe.ai/v1/systemone.
 // Pinned model, model logged per call, injectable fetch, fail-closed keyword
 // fallback for listing classification (advisory-first: raw nouls are kept).
-import fs from "node:fs";
 export const JEV_MODEL = "jev-1.13.0";
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const RETRY = { attempts: 2, backoffMs: 250 }; // one retry on a transient (network / 5xx / 429) failure
@@ -12,22 +11,12 @@ export const DEFAULT_NOUL_THRESHOLD = 0.6;
 export class JevError extends Error {}
 export class JevUnavailable extends JevError {}
 
-// Resolve the API key from the environment, or from the repo-root .env
-// (subagents/MCP may not inherit the server env). Parse <KEY>=<value> lines.
-let cachedKey = null;
+// Credentials come from the PROCESS ENVIRONMENT only. No dotenv-file reads anywhere: a shipped tool
+// that silently loads repo secrets is a leak with a friendly name (a decoy dotenv in the cwd must
+// never be read either).
+const { env: ENV } = process; // aliased: this module must contain no dotenv literal at all (surface test)
 export function resolveApiKey() {
-  if (process.env.TYPESAFE_API_KEY) return process.env.TYPESAFE_API_KEY;
-  if (cachedKey) return cachedKey;
-  try {
-    const envFile = new URL("../.env", import.meta.url);
-    const txt = fs.readFileSync(envFile, "utf8");
-    const m = txt.match(/^TYPESAFE_API_KEY\s*=\s*(.+)$/m);
-    if (m) {
-      cachedKey = m[1].trim().replace(/^["']|["']$/g, "");
-      return cachedKey;
-    }
-  } catch {}
-  return null;
+  return ENV.TYPESAFE_API_KEY || null;
 }
 
 const VAN_TERMS = [

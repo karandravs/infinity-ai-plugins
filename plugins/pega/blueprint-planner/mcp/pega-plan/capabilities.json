@@ -1,0 +1,24 @@
+[
+  {
+    "capability": "access",
+    "aliases": ["access", "access group", "access groups", "case access", "data access", "persona", "personas", "user role", "user roles"],
+    "kind": "config",
+    "families": [],
+    "closest": {
+      "what": "App Studio → Users & Roles (access groups, roles and workbaskets)",
+      "why": "persona-based access is a supported Infinity configuration surface, but this corpus authors rules only — it carries no schema or example payload for Rule-Security-AccessGroup",
+      "source": "methodology-blueprint-delivered"
+    }
+  },
+  {
+    "capability": "sso",
+    "aliases": ["sso", "single sign-on", "single sign on", "saml", "openid connect"],
+    "kind": "config",
+    "families": [],
+    "closest": {
+      "what": "an Infinity authentication service (SAML 2.0 or OAuth 2.0 / OIDC) plus the identity provider's metadata",
+      "why": "authentication services are configured rather than authored and half of the setup lives in the identity provider, so this corpus has no schema or example payload for them",
+      "source": "methodology-blueprint-delivered"
+    }
+  }
+]
