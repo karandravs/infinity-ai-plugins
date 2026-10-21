@@ -26,7 +26,7 @@ import {
   resolveUnnamedSor, routeClauses, ROUTE,
 } from "./plan-lib.mjs";
 import { applyPlatformTruths } from "./preflight-lib.mjs";
-import { resolvePrereqs } from "./prereq-lib.mjs";
+import { resolvePrereqs, structuralClosure } from "./prereq-lib.mjs";
 import { decide, loadRegistry, describeClosest, routedAboveFloor, NEAR_CUTOFF } from "./verdict-lib.mjs";
 import { splitClauses, normaliseQuestion } from "./question-lib.mjs";
 import { corpusPaths } from "./corpus-lib.mjs";
@@ -454,8 +454,23 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
       const evidence = capability
         ? routedAboveFloor(measured.filter((r) => !r.family.startsWith("methodology") && Number(r.margin) >= -NEAR_CUTOFF), floor)
         : [];
+      // A STRUCTURAL PREREQUISITE (or DEPENDENT) OF THE WINNER IS A COMPLEMENT, NOT A COMPETITOR.
+      // decide() reads a near-cutoff score as "two candidate answers disagree", which is right for two
+      // unrelated families and wrong for a family the answer already contains: `obj-class` is a case
+      // type's own prerequisite and the planner emits it as an earlier step, so its negative margin is
+      // not a disagreement about WHAT to build. Such a family is therefore excluded from the ambiguity
+      // comparison (the `role` below says why it is still on the record), while everything decide()
+      // needs to stay generic — the precedence table, the band, the tie rule — is left untouched.
+      const top = [...evidence].sort((a, b) => Number(b.score) - Number(a.score))[0] || null;
+      const closure = top ? structuralClosure(top.family) : new Set();
+      const needsOfTop = new Set(top ? resolvePrereqs([top.family]).steps.map(bareFamily) : []);
+      const roleOf = (family) => {
+        if (!top || family === top.family || !closure.has(family)) return "candidate";
+        return needsOfTop.has(family) ? "prerequisite" : "dependent";
+      };
+      const compared = evidence.filter((r) => roleOf(r.family) === "candidate");
       planned.push({
-        clause, goal, plan, capability, seen: measured, routed: evidence, floor,
+        clause, goal, plan, capability, seen: measured, routed: evidence, compared, floor, roleOf,
         cutoff: Number.isFinite(plan?.routing?.cutoff) ? plan.routing.cutoff : null,
       });
     }
@@ -464,9 +479,11 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     throw e;
   }
 
-  // B) the verdict, from the evidence decide() documents (per clause, worst clause wins).
+  // B) the verdict, from the evidence decide() documents (per clause, worst clause wins). `compared`
+  // is the clause's evidence MINUS the winner's structural complements (see the roleOf note above):
+  // a prerequisite/dependent cannot compete with the family it is a part of.
   const decision = decide(
-    planned.map((p) => ({ text: p.clause, capability: p.capability, routed: p.routed, cutoff: p.cutoff, floor: p.floor })),
+    planned.map((p) => ({ text: p.clause, capability: p.capability, routed: p.compared, cutoff: p.cutoff, floor: p.floor })),
     registry
   );
   planned.forEach((p, i) => { p.verdict = decision.perClause[i]?.verdict || "unsure"; p.signal = decision.perClause[i]?.signal || null; p.closest = decision.perClause[i]?.closest || null; p.stepNumbers = []; });
@@ -620,6 +637,10 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
       // false → methodology meta-doc or a candidate below the near-cutoff band: reported, not used
       authoring: !r.family.startsWith("methodology"),
       used: p.routed.some((x) => x.family === r.family),
+      // "candidate" → competed for the verdict. "prerequisite"/"dependent" → a structural complement
+      // of the winner (a part of the answer, already a step), so it was reported but never weighed
+      // as a competing candidate. `role` is presentation of a decision already made in B.
+      role: p.roleOf(r.family),
     }))),
     cutoff: cutoffs.length ? Math.max(...cutoffs) : null,
     evidence_absent: decision.evidenceAbsent,
