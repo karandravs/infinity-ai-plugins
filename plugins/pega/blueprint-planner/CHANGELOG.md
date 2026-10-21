@@ -26,10 +26,6 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
 - **`eval/demo-transcript.md`** — five Pega how-to questions answered end to end (verdict, steps,
   closest, inputs) by `plan_pega_change`; **`eval/head-to-head.md`** — planner vs the plugin baseline
   on the same questions, with computed baseline metrics.
-- **`coverage` flag on the plan result**: a top-level `coverage` (`{ covered, capability, phrase, reason }`)
-  plus a `caveats[]` entry when `covered:false` — an honest "no authoring rule family in the corpus declares
-  this capability" signal (e.g. "Configure Email Account", "Configure SSO", access control). Advisory: a plan
-  is still returned, but an uncovered goal is a **human step, not a build**.
 - **Offline proof scripts** (deterministic, no Pega environment): `harness/eval-integration.mjs` (SOR
   integration chain plans end-to-end), `harness/eval-backlog.mjs` (whole Blueprint backlog through
   plan → compose → verify), `harness/eval-mcp.mjs` (the shipped MCP over the real stdio protocol),
@@ -43,12 +39,15 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
   composes) with each field tagged by provenance.
 - Integration is **contract-grounded**: endpoint values are filled from the OpenAPI contracts in
   `contracts/` instead of templated placeholders.
-- CI runs the keyless Blueprint contract proof (`node blueprint/verify-blueprint.mjs`).
+- CI runs the keyless Blueprint contract proof (`node blueprint/verify-blueprint.mjs`) and a keyless
+  corpus-discovery smoke.
 
-### Fixed
-- The **`coverage` signal is surfaced to the acting agent** — the `pega-build` SKILL.md workflow and the
-  `plan_pega_build` tool description now say `covered:false` ⇒ flag for a human, do not build — so an
-  uncovered goal is no longer silently built from a structurally-valid substitute rule.
+> **Superseded by the `plan_pega_change` contract above** (kept for the record, not as current
+> behaviour): the top-level `coverage` flag and its `caveats[]` entry, the `covered:false` ⇒
+> "flag a human, do not build" guidance in `SKILL.md` and the tool description, the `plan_pega_build`
+> workflow with its `blanks` fill and the `verify`/`goalFit` grading. The **verdict** is that signal
+> now: a goal whose capability no corpus family declares comes back `no` (or `alternative`) with
+> `closest` naming the absent capability.
 
 ## [0.2.0] — 2026-10-15
 

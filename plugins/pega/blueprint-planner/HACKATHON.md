@@ -32,21 +32,22 @@ per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · R
   (REST connector → request transform → response transform → data page):
   16 goals · routed 16/16 · expected-family match 16/16 · gated 16/16 · refs 17 · avgFit 0.49
 
-+ The WHOLE blueprint backlog, offline (eval/backlog-proof.md) — all 40 stories →
++ The WHOLE blueprint backlog, offline (engineering repo: `docs/backlog-proof.md` — **not shipped**:
+  it records a real build and prescribes a branch) — all 40 stories →
   plan → the ordered `create-rule` calls, with no live environment:
   40/40 planned · 40/40 composed · verify PASS 40/40
   …and the planner **flags the 12** whose capability the corpus does not declare
   (email-account, SSO, access-control) instead of silently substituting — 0 false flags on the 51 eval goals
 
 + The shipped MCP surface (eval/mcp-proof.md) — the real server spawned over stdio:
-  27/27 asserts · tool `plan_pega_build` + prompt `pega-build` + shipped skill, end-to-end
-  *(that snapshot predates the `plan_pega_change` contract — see `eval/demo-transcript.md`)*
+  26/26 asserts · tool `plan_pega_change` + prompt `pega-build` + shipped skill, end-to-end
 
 + Blueprint layer, offline (eval/blueprint-proof.md + `blueprint/verify-blueprint.mjs`) —
   recipes parse, refs resolve, selectors well-formed, the create→complete chain covers 7/7 sections,
   and every Blueprint artifact maps to a real corpus family: **15/15 asserts, no gaps**
 
-+ Build path, offline (eval/build-path.md) — the exact `create-rule` calls a plan yields,
++ Build path, offline (engineering repo: `docs/build-path.md` — **not shipped**: it records a real
+  build and prescribes a branch) — the exact `create-rule` calls a plan yields,
   composed + schema-checked with NO live environment: 6 rules · verify PASS 6/6
 ```
 
@@ -69,10 +70,12 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 - The **integration chain** routes + gates 16/16 and is now **grounded on the contracts** — the SOR the
   goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.49; weak-fit 1/16 —
   one connector whose noul is intrinsically low) — we publish the numbers rather than hide them.
-- **All 40 backlog stories plan + compose**, and 12 are **flagged** by the planner's own `coverage`
-  signal as **capability-not-in-corpus** (no family for email-account/SSO/access-control) — *flagged, never
-  silently substituted*. The `verify PASS 40/40` is **near-tautological** (the planner only composes rules
-  whose `verify` it set) — the honest signals are *planned/composed*, *coverage*, and the published gap.
+- **All 40 backlog stories plan + compose** (the legacy `plan_pega_build` run), and 12 are
+  **capability-not-in-corpus** (no family for email-account/SSO/access-control) — *flagged, never
+  silently substituted*. Under the `plan_pega_change` contract that flag **is the verdict**: such a
+  goal comes back `no` (or `alternative`) with `closest` naming the absent capability. The
+  `verify PASS 40/40` is **near-tautological** (the planner only composes rules
+  whose `verify` it set) — the honest signals are *planned/composed*, *the verdict*, and the published gap.
 - Blueprint behaviour that needs a **live browser** (selectors matching the real DOM, login/import) is
   **not** among the offline asserts — the verifier says so instead of pretending.
 

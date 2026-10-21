@@ -42,8 +42,9 @@ grounded in `contracts/`).
 ## 4 · Build (the *agent*, via Pega's Authoring MCP) — ~30s
 The agent **resolves the `unresolved` elements / `inputs_required`**, then calls `create-rule` **in
 step order** — in the Change Request *you* have open (the planner prescribes no branch).
-Show one rule appear in the app. *(Needs a live env; the offline equivalent — the exact `create-rule`
-calls a plan yields, composed + schema-checked with no environment — is `eval/build-path.md`.)*
+Show one rule appear in the app. *(Needs a live env. The offline equivalent — the exact `create-rule`
+calls a plan yields, composed + schema-checked with no environment — is **not shipped**: it records a
+real build and prescribes a branch, so it lives in the engineering repo as `docs/build-path.md`.)*
 
 ## 5 · The proof (evals) — 30s
 ```bash
@@ -53,10 +54,11 @@ node blueprint/verify-blueprint.mjs  # 15 asserts over the blueprint recipes (of
 ```
 Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%, avgFit 0.39**, gated plans,
 per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16, avgFit 0.49**;
-`eval/backlog-proof.md` → **all 40 stories planned + composed offline, 12 flagged as capability-not-in-corpus**;
 `eval/blueprint-proof.md` → the blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family);
-`eval/mcp-proof.md` → the **shipped MCP surface (27/27)**; and `eval/build-path.md` → the exact `create-rule`
-calls, composed **offline** (no live env needed).
+`eval/mcp-proof.md` → the **shipped MCP surface (26/26)**; `eval/demo-transcript.md` + `eval/head-to-head.md`
+→ the `plan_pega_change` verdict contract, end to end. (The two harness-generated reports —
+`backlog-proof` and `build-path` — are **not shipped**: they record a real build and prescribe a branch;
+they stay in the engineering repo.)
 
 ---
 ### The line to end on

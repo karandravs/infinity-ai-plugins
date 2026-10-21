@@ -9,9 +9,10 @@ A thin layer **on top of** the Pega Infinity Authoring plugin that adds two thin
    an Agile-Workbench story) with **one defensible answer**: a `verdict`
    (`yes` / `alternative` / `no` / `unsure`), ordered `steps` with composed payloads, `closest`
    (what to do instead, or what would resolve it), `inputs_required`, `checks` and `unresolved[]`.
-   It reads the **plugin's own bundled corpus**
-   (`plugins/pega/infinity-ai-plugins/claude/resources/26-1`) — no corpus duplication, and no env
-   var needed: the neighbouring plugin's corpus is discovered automatically.
+   It **bundles no corpus**: it must run beside `infinity-ai-plugins` and reads that plugin's
+   `claude/resources/<ver>` tree (`plugins/pega/infinity-ai-plugins/claude/resources/26-1` here) —
+   no duplication, no env var needed *when the sibling is there*; set `PEGA_CORPUS_ROOT` if it is not.
+   A missing corpus is a loud startup error naming every path tried, never a silent empty answer.
 
 **Philosophy:** *code for guarantees, the model for judgment.* Deterministic structure from the
 corpus + schemas; judgment (routing, value selection) from Jev; the **agent** supplies the free text
@@ -59,7 +60,13 @@ cd plugins/pega/blueprint-planner
 npm install          # yaml, zod, ajv, ajv-formats, @modelcontextprotocol/sdk, playwright-core
 ```
 Then merge the `mcp` block from `opencode.json` into your opencode config. The planner discovers the
-neighbouring plugin's bundled corpus by itself
-(`plugins/pega/infinity-ai-plugins/claude/resources/<ver>`) — no env var needed; set
-`PEGA_CORPUS_ROOT` only to point at a different corpus root. Credentials (`TYPESAFE_API_KEY`) come
-from the process environment; the planner reads no `.env` file.
+neighbouring plugin's corpus (`plugins/pega/infinity-ai-plugins/claude/resources/<ver>`) by itself, so
+**the sibling `infinity-ai-plugins` plugin must be installed** — set `PEGA_CORPUS_ROOT` only to point
+at a different corpus root. Credentials (`TYPESAFE_API_KEY`) come from
+the process environment; the planner reads no `.env` file.
+
+## Mirror policy
+`mcp/pega-plan/**` is a **mirror** of `pega-automated/mcp/pega-plan` (the engineering repo): fix it
+there, then re-copy — **do not edit it here**. `eval/eval-plan.mjs` and `eval/eval-integration.mjs` are
+the legacy loop scripts: they still drive `planPegaBuild`, not the `plan_pega_change` verdict contract,
+and predate it.

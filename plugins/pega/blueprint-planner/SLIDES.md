@@ -98,12 +98,16 @@ stories 40 · planned 40/40 · composed 40/40 · verify-pass 40/40
 
 ```
 Blueprint layer, offline   15/15 asserts · 7/7 sections · every artifact→corpus family
-Shipped MCP surface        27/27 asserts — real server over stdio:
+Shipped MCP surface        26/26 asserts — real server over stdio:
                            tool plan_pega_change · prompt pega-build · shipped skill
-Build path, offline        6 rules · verify PASS 6/6 (no live env needed)
+Verdict contract, live     eval/demo-transcript.md · eval/head-to-head.md
+                           (5 questions, verdict + steps, planner vs baseline)
 ```
 
-`npm test` → **44 checks** (keyless-safe) · CI runs the offline proof.
+> The harness-generated `backlog-proof` / `build-path` reports are **not shipped**: they record a real
+> build and prescribe a branch, so they stay in the engineering repo (`pega-automated/docs/`).
+
+The engineering repo's `npm test` → **248 checks** (keyless-safe) · CI runs the offline proof.
 
 ---
 

@@ -7,7 +7,8 @@
 //     obj-casetype → obj-class edge at all, although a case type cannot exist without its class;
 //   * conversely ui-view claims to need a class when what it actually needs is the case type.
 // Using them as prerequisites invented steps and missed real ones, so the graph is kept for
-// ORDERING only (graph-lib.mjs `requireOrder`) and the domain facts live here.
+// PRESENTATION ORDER only (graph-lib.mjs `requireOrder` — reading order, not authoring order) and
+// the domain facts live here.
 //
 // ONE LEVEL ONLY: resolvePrereqs returns the DIRECT prerequisites of what it was given. A caller
 // that needs second-order prerequisites must re-resolve over the returned `steps` itself — this
