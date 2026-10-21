@@ -66,8 +66,8 @@ The workflow **ships with the MCP** (skill + prompt) — no bespoke agent prompt
 ```
 Plan eval     35 goals × 5 industries (Banking·Disputes, Insurance·Claims,
               Healthcare·Onboarding, Telecom·Service Order, Retail·Returns)
-              PRIMARY-ROUTE STABILITY  100% (35/35)
-              set-stability            100% (35/35)
+              PRIMARY-ROUTE STABILITY  100% (35/35)   ← legacy per-goal path, 3 samples
+              set-stability            100% (35/35)   ← same path
               plans gated              40
               per industry             7/7 · 7/7 · 7/7 · 7/7 · 7/7
 
@@ -75,8 +75,11 @@ SOR integration chain   16 goals · routed 16/16 · expected-family 16/16
                         connectors grounded 4/4 · avgFit 0.49
 ```
 
-**The primary rule a story maps to is deterministic across repeated calls.**
-(Jev's stochasticity shows only in the recall *margin*; `plan_id` freezes a plan for execution.)
+**Those stability numbers were measured on the legacy per-goal path** (`planPegaBuild`/`routeSkills`,
+**3 averaged samples per goal**). The **shipped** `plan_pega_change` path spends **1 batched sample**
+for the whole question, so a question sitting near the cutoff can flip between runs —
+`eval/head-to-head.md` names the two near-cutoff questions it had to replace rather than pinning one
+question to one class.
 
 ---
 
@@ -107,7 +110,7 @@ Verdict contract, live     eval/demo-transcript.md · eval/head-to-head.md
 > The harness-generated `backlog-proof` / `build-path` reports are **not shipped**: they record a real
 > build and prescribe a branch, so they stay in the engineering repo (`pega-automated/docs/`).
 
-The engineering repo's `npm test` → **248 checks** (keyless-safe) · CI runs the offline proof.
+The engineering repo's `npm test` → **254 checks** (keyless-safe) · CI runs the offline proof.
 
 ---
 
@@ -123,6 +126,10 @@ connect-rest · skill rules-rule-connect-rest · verify required-keys-present
 ```
 
 Every rule carries: **skill · source example · gate · goalFit · payload keys · references.**
+
+> *(That layout is the **legacy** `planPegaBuild` plan view — `verify`/`goalFit` are harness-only now.
+> The shipped answer's step carries `rule` (skill, example, score/margin), `payload`, `provenance`,
+> `checks` and `unresolved`, plus `prerequisites` as step numbers.)*
 
 ---
 
@@ -156,7 +163,7 @@ refs: the data page names its connector + transforms  → agent points them at r
 2. import → Agile Workbench backlog (US-*)
 3. plan_pega_change("How do I configure a dispute case with an SLA and a CRM lookup?") → verdict + steps
 4. the agent resolves the unresolved + create-rule (Authoring MCP) → rule in YOUR Change Request
-5. the evals → 100% primary-route stability · 40/40 backlog · 15/15 blueprint
+5. the evals → 100% primary-route stability (legacy path, 3 samples) · 40/40 backlog · 15/15 blueprint
 ```
 
 > *Planning is ours; **building is the agent's.** The plan is an artifact you can measure — and we did.*
@@ -168,7 +175,7 @@ refs: the data page names its connector + transforms  → agent points them at r
 | Claim | Evidence |
 |---|---|
 | **Fork, not a rewrite** | one layer on the official plugin; reuses its corpus |
-| **Deterministic where it must be** | 100% primary-route + set stability |
+| **Deterministic where it must be** | 100% primary-route + set stability — measured on the legacy per-goal path (3 samples); the shipped path's 1 batched sample is disclosed in `eval/head-to-head.md` |
 | **Per rule, executable** | skill · example · payload · references · gate |
 | **Honest** | flags capability gaps; states what's unproven |
 | **Evals-first** | measurable + hill-climbed on real platform feedback |

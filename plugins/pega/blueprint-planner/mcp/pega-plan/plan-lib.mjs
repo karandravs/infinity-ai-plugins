@@ -21,8 +21,10 @@ export const CORPUS = corpusPaths().corpus; // discovered + validated at startup
 // ---- tunables (named, not inline magic) ----
 const AUTHORING_PREFIXES = ["methodology", "rules-rule"]; // which corpus families are rules to author
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
-// routing tunables — exported because the answer's `provenance.routing_samples` must state how many
-// independent samples each family's score averages (the verdict layer reports it, never re-routes).
+// routing tunables — `samples` is the number of independent judgment readings behind each routing
+// score: 3 on the legacy per-goal path (routeSkills averages that many calls), 1 on the shipped path
+// (routeClauses batches every clause × family into ONE call). The answer's
+// `provenance.routing_samples` states which, and the verdict layer reports it, never re-routes.
 export const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 3, band: 0.04 }; // recall-oriented shortlist (see routeSkills)
 const PICK = { requiredWeight: 5, methodWeight: 1.5, variantPenalty: 0.3, variantRe: /auth|dynamic|grouped/i };
 const CORPUS_CHOICE = { min: 2, max: 12, maxLen: 32, maxWords: 4 }; // a small observed vocabulary is a usable menu

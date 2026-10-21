@@ -13,7 +13,7 @@ is left to the model to improvise — no measurable plan, no proof it's right.
 | Piece | What it does |
 |---|---|
 | **Blueprint maker** (`blueprint/`) | Playwright drives `pega.com/blueprint`: spec → Blueprint (case types, data model, systems, personas). |
-| **Planner** (`mcp/pega-plan/`, tool `plan_pega_change`) | A blueprint story or how-to question → **one defensible answer**: a `verdict` (`yes`/`alternative`/`no`/`unsure`), ordered `steps` (which rules, which order, payloads), `closest`, the `inputs_required` bill of materials, and the `unresolved` elements the agent resolves. Reads the **plugin's own bundled corpus** — no duplication, no env var. |
+| **Planner** (`mcp/pega-plan/`, tool `plan_pega_change`) | A blueprint story or how-to question → **one defensible answer**: a `verdict` (`yes`/`alternative`/`no`/`unsure`), ordered `steps` (which rules, which order, payloads), `closest`, the `inputs_required` bill of materials, and the `unresolved` elements the agent resolves. Reads the **sibling `infinity-ai-plugins` corpus** (`claude/resources/<ver>`) — no duplication, no env var needed while the sibling plugin is installed. |
 
 **It never writes rules.** The **agent** + `pega-infinity-authoring` build. The workflow **ships with
 the MCP** (skill + prompt), not a bespoke agent prompt — so *any* agent can use it.
@@ -25,6 +25,7 @@ Telecom·Service Order, Retail·Returns) × 7 blueprint-shaped goals
 
 ```
 35 goals · PRIMARY-ROUTE STABILITY 100% (35/35) · set-stability 100% (35/35) · avgFit 0.41
+   (both stability figures: the LEGACY per-goal path, 3 averaged samples per goal)
 plans gated required-keys-present: 40 · plans with references to fill: 11
 per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · Retail 7/7
 
@@ -59,9 +60,13 @@ obj-casetype · skill rules-rule-obj-casetype · example adhoc-processes… · v
 connect-rest · skill rules-rule-connect-rest · example get-runtime-url.md · verify required-keys-present
 ```
 
-**Why this metric matters:** the *plan* is deterministic where it must be — the primary rule a story
-maps to is **100% stable** across repeated calls (Jev's stochasticity only shows in the recall
-*margin*). The plan is an artifact an agent can execute; `verify` + `goalFit` grade it.
+**Why this metric matters:** the *plan* is deterministic where it must be — on the **legacy per-goal
+path** (`planPegaBuild`, 3 averaged samples per goal) the primary rule a story maps to was **100%
+stable** across repeated calls (Jev's stochasticity showed only in the recall *margin*). The **shipped**
+`plan_pega_change` path spends **1 batched sample** for the whole question, so a near-cutoff question
+can flip between runs — `eval/head-to-head.md` names the two near-cutoff questions it replaced rather
+than pinning one question to one class. The plan is an artifact an agent can execute; `verify` +
+`goalFit` grade it on the harness path.
 
 ## Boundaries, stated honestly
 - **References** to non-existent rules are surfaced as `unresolved` (`kind: reference`) → the agent names real rules.
@@ -84,7 +89,8 @@ It's a **fork, not a rewrite** (one layer on the official plugin); it's **measur
 gate, goalFit) and **hill-climbed on real platform feedback**; and it draws a **clean boundary** —
 planning is ours, *building is the agent's*.
 
-`npm test` → **44 checks** (keyless-safe; CI runs the offline blueprint proof too).
+The engineering repo's `npm test` → **254 checks keyless / 269 with a judgment key** (CI runs the
+offline blueprint proof too).
 
 **Presenting it:** [`SLIDES.md`](SLIDES.md) (the deck) · [`DEMO.md`](DEMO.md) (the 3-minute script) ·
 [`eval/`](eval/) (the proof artifacts).

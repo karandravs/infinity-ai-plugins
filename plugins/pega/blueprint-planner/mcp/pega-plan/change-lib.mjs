@@ -27,7 +27,7 @@ import {
 } from "./plan-lib.mjs";
 import { applyPlatformTruths } from "./preflight-lib.mjs";
 import { resolvePrereqs } from "./prereq-lib.mjs";
-import { decide, loadRegistry, describeClosest, routedAboveFloor } from "./verdict-lib.mjs";
+import { decide, loadRegistry, describeClosest, routedAboveFloor, NEAR_CUTOFF } from "./verdict-lib.mjs";
 import { splitClauses, normaliseQuestion } from "./question-lib.mjs";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { JEV_MODEL, JevError, JevUnavailable } from "../../lib/jev-lib.mjs";
@@ -249,12 +249,31 @@ async function composeFamily(family, { namespace } = {}) {
       why: missing.length ? `required keys are missing (${missing.join(", ")})` : `it does not pass the schema gate (${blocking[0]})`,
     };
   }
-  const blanks = blanksFor({ payload, provenance: {} });
+  // A prerequisite is composed with NO goal: nothing in it came from the question. Its provenance
+  // must say so, or `blanksFor` sees no borrowed value and the step reports `unresolved: 0` — a claim
+  // that an all-example payload was grounded. Every top-level key that is neither the platform's own
+  // auto-fill nor composed from the supplied namespace is `example-default`.
+  const provenance = provenanceForComposed(payload, schema, { namespace });
+  const blanks = blanksFor({ payload, provenance });
   if (sor) blanks.unshift(sor.blank);
   return {
-    payload, example: template.file, schemaIssues, preflightIssues: preflight.issues,
-    unresolved: unresolvedFor({ payload, provenance: {}, blanks }),
+    payload, example: template.file, schemaIssues, preflightIssues: preflight.issues, provenance,
+    unresolved: unresolvedFor({ payload, provenance, blanks }),
   };
+}
+
+// The provenance of a payload composed without a goal (a structural prerequisite). Only the keys the
+// PLATFORM supplies (`x-pega-autoFill`) or that were composed from the caller's namespace are not the
+// example's; everything else is `example-default`, which is what makes it a blank.
+function provenanceForComposed(payload, schema, { namespace } = {}) {
+  const autoFill = schema.autoFill || {};
+  const provenance = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (key in autoFill) { provenance[key] = { value, source: "schema-autofill" }; continue; }
+    const fromNamespace = !!namespace && typeof value === "string" && value.startsWith(`${namespace}-`);
+    provenance[key] = { value, source: fromNamespace ? "namespace" : "example-default" };
+  }
+  return provenance;
 }
 
 // ---- 6. steps ----
@@ -292,7 +311,7 @@ function prereqStep(family, composed) {
       example: composed.example, confidence: null, margin_to_cutoff: null,
     },
     payload: composed.payload,
-    provenance: {},
+    provenance: composed.provenance || {},
     checks: { schemaIssues: composed.schemaIssues || [], platformTruthIssues: composed.preflightIssues || [] },
     unresolved: composed.unresolved || [],
     prerequisites: [],
@@ -346,7 +365,9 @@ function composeAnswer({ verdict, perClause, steps, closest, inputs }) {
 // ---- 8. provenance ----
 // corpus_version from the discovered corpus; model from the pinned Jev client; the registry
 // (capabilities.json) carries no version field of its own, so its version IS the corpus version.
-// `routing_samples` is 1 on the shipped path: one batched call covers every clause × family (R15).
+// `routing_samples` is the number of independent judgment readings behind each routing score: 3 on
+// the legacy per-goal path (routeSkills averages that many calls), 1 on the shipped path (routeClauses
+// batches every clause × family into ONE call — R15).
 // `timing_ms` is the MEASURED cost (R16): routing = the one judgment call, compose = everything
 // else (examples, payload composition, gates), total = end to end.
 function provenanceOf({ routing_samples = 1, timing_ms = null } = {}) {
@@ -379,10 +400,9 @@ function outageAnswer(e, timing_ms = null) {
   };
 }
 
-// The decision layer's near-cutoff band (verdict-lib NEAR_CUTOFF). Restated here because the
-// ASSEMBLY uses it to decide what counts as evidence: a family that sits within this band below
-// the cutoff is a near-threshold signal, and the spec's `no` row excludes exactly that case.
-const NEAR_CUTOFF = 0.05;
+// The near-cutoff band the assembly uses to decide what counts as evidence is verdict-lib's own
+// NEAR_CUTOFF (imported above): a family within that band below the cutoff is a near-threshold
+// signal, and the spec's `no` row excludes exactly that case.
 
 // ---- 9. the answer ----
 export async function planPegaChange({ question, contracts_dir, namespace, planFn = planPegaBuild, jevFn } = {}) {
@@ -496,6 +516,18 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     for (const input of resolvePrereqs([family]).inputs) if (!inputs.has(input.name)) inputs.set(input.name, input);
   };
   const composePrereqStep = async (family) => {
+    // A prerequisite's OWN prerequisites are prerequisites too. resolvePrereqs is deliberately ONE
+    // level (prereq-lib) so an answer stays auditable, which puts the walk here: without it a
+    // `ui-view` question ships a case type with no class and still answers `yes` — a `yes` with an
+    // unlisted prerequisite, which the spec forbids. `visiting` guards a cycle.
+    if (visiting.has(family)) return null;
+    visiting.add(family);
+    for (const sub of resolvePrereqs([family]).steps) {
+      if (emitted.has(sub)) continue;
+      if (ruleDraft.has(sub)) await emit(ruleDraft.get(sub));
+      else await composePrereqStep(sub);
+    }
+    visiting.delete(family);
     const composed = await composeFamily(family, { namespace });
     const step = push(prereqStep(family, composed));
     emitted.set(family, step);
@@ -544,9 +576,22 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
       .sort((a, b) => a - b);
   }
 
+  // The spec's `yes` definition, made structural: every structural prerequisite in the closure of
+  // every emitted family is either a STEP or an `inputs_required` entry. The walk above already
+  // guarantees it; this pass turns the guarantee into a check, so a family that ever slips through is
+  // reported as an input the caller must supply instead of silently missing from the answer.
+  const accounted = new Set(emitted.keys());
+  const queue = [...accounted];
+  while (queue.length) {
+    const family = queue.pop();
+    for (const need of resolvePrereqs([family]).steps) if (!accounted.has(need)) { accounted.add(need); queue.push(need); }
+    for (const input of resolvePrereqs([family]).inputs) if (!inputs.has(input.name)) inputs.set(input.name, input);
+  }
+  for (const family of accounted) if (!emitted.has(family) && !inputs.has(family))
+    inputs.set(family, { name: family, why: "a structural prerequisite of a step above that this planner could not compose — create it first, or name the existing rule" });
+
   // D) the bill of materials. A class name cannot be invented: when a payload carries an example
   // class and no namespace was supplied, the caller owes us one.
-  const CLASS_KEY = /(ClassName|Class)$/;
   const carriesExampleClass = (payload) =>
     !!payload && typeof payload === "object"
     && Object.entries(payload).some(([k, v]) => CLASS_KEY.test(k) && typeof v === "string" && v.includes("-"));

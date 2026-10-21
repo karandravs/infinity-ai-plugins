@@ -21,6 +21,18 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
   **no `.env` reads** in the shipped `mcp/` or `lib/`.
 - **Licensing:** `LICENSE` (Pega Infinity AI Plugins License v1.0) + `NOTICE` (derived from Pega
   Infinity AI Plugins © Pegasystems Inc., modified by the blueprint-planner authors).
+- Routing stability → **100%** on the **legacy per-goal path** (`planPegaBuild`/`routeSkills`, 3
+  averaged samples per goal): the correct rule-authoring family was selected for every probed goal.
+  The **shipped** `plan_pega_change` path spends **1 batched sample** for the whole question, so a
+  question sitting near the cutoff can flip between runs — `eval/head-to-head.md` names the
+  near-cutoff questions it had to replace instead of pinning one question to one class.
+- Rule content is **goal-derived**: composed values/text come from the goal — code *selects* enum
+  values (the value the goal names, else the family's example) and code *composes* the free text; the
+  shipped path makes no judgment call here. Each field is tagged by provenance.
+- Integration is **contract-grounded**: endpoint values are filled from the OpenAPI contracts in
+  `contracts/` instead of templated placeholders.
+- CI runs the keyless Blueprint contract proof (`node blueprint/verify-blueprint.mjs`) and a keyless
+  corpus-discovery smoke.
 
 ### Added
 - **`eval/demo-transcript.md`** — five Pega how-to questions answered end to end (verdict, steps,
@@ -31,16 +43,6 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
   plan → compose → verify), `harness/eval-mcp.mjs` (the shipped MCP over the real stdio protocol),
   `harness/dryrun-build.mjs` (the exact `create-rule` calls the build path would make) and
   `blueprint/verify-blueprint.mjs` (the Blueprint recipe-layer contract).
-
-### Changed
-- Routing stability → **100%** (set + primary): the correct rule-authoring family is selected for every
-  probed goal, not just one of those returned.
-- Rule content is **goal-derived**: composed values/text come from the goal (Jev selects enum values, code
-  composes) with each field tagged by provenance.
-- Integration is **contract-grounded**: endpoint values are filled from the OpenAPI contracts in
-  `contracts/` instead of templated placeholders.
-- CI runs the keyless Blueprint contract proof (`node blueprint/verify-blueprint.mjs`) and a keyless
-  corpus-discovery smoke.
 
 > **Superseded by the `plan_pega_change` contract above** (kept for the record, not as current
 > behaviour): the top-level `coverage` flag and its `caveats[]` entry, the `covered:false` ⇒

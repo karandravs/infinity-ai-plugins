@@ -5,7 +5,8 @@
 cd plugins/pega/blueprint-planner
 npm install                 # yaml, zod, @modelcontextprotocol/sdk, playwright-core
 # merge the `mcp` block from opencode.json into your opencode config;
-# set <your-pega-base-url> (env root, no /prweb) and PEGA_CORPUS=<…/claude/resources/26-1>
+# set <your-pega-base-url> (env root, no /prweb); the planner finds the sibling
+# infinity-ai-plugins corpus by itself — set PEGA_CORPUS_ROOT only to point elsewhere
 ```
 Prereqs: **Java 17** (Authoring MCP), a reachable Pega env, a Blueprint (or use the maker below).
 
@@ -32,7 +33,9 @@ plan_pega_change({ question: "How do I configure a dispute case with an SLA and 
 verdict: unsure (clauses 1-2 yes; clause 3 unsure — name which one it needs)
 steps:  1. Create the class  2. Create the case type  3. Create the service level
   step 2 · obj-casetype · payload keys: pyLabel, pyClassName, pyStages, …
-  checks: schemaIssues [] · platformTruthIssues []   unresolved: pyClassName (reference)
+  checks: schemaIssues [] · platformTruthIssues [pyClassName — kind "verify-live": the class must
+          already exist (Rule-Obj-Class) in the target application; only a live app can verify it]
+  unresolved: 17 elements (pyClassName → reference "must name an existing class"; pyStages → borrowed entries; …)
   inputs_required: flow, namespace
 ```
 Ask a second one whose capability the corpus does not author (e.g. email account, SSO) — the answer is
@@ -52,7 +55,10 @@ node eval/eval-plan.mjs              # 35 goals × 5 industries
 node eval/eval-integration.mjs       # 16 goals: connector→transforms→data page
 node blueprint/verify-blueprint.mjs  # 15 asserts over the blueprint recipes (offline)
 ```
-Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%, avgFit 0.39**, gated plans,
+Open `eval/eval-report.md` → **primary-route stability 100%, set-stability 100%, avgFit 0.39** (the two
+stability figures were measured on the **legacy per-goal path, 3 samples per goal**; the shipped
+`plan_pega_change` path uses **1 batched sample**, so a near-cutoff question can flip — see
+`eval/head-to-head.md`), gated plans,
 per-rule layout; `eval/eval-integration.md` → the **SOR integration chain routes 16/16, avgFit 0.49**;
 `eval/blueprint-proof.md` → the blueprint layer's contract (7/7 sections, 15/15 asserts, every artifact→family);
 `eval/mcp-proof.md` → the **shipped MCP surface (26/26)**; `eval/demo-transcript.md` + `eval/head-to-head.md`

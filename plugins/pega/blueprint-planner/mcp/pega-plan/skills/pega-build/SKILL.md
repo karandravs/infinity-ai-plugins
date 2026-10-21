@@ -34,8 +34,12 @@ don't write files or shell.
      the absent capability** (`no authoring family for "<capability>"`) and why it is absent — it is a
      diagnosis, not a recipe. Route it to a human.
    - **`unsure`** — there is no evidence either way (near-cutoff routing, a clause that names no
-     object, or the judgment service being down). **Do not build it and do not call it impossible.**
-     `closest` names the candidates or what would resolve it — usually a sharper question.
+     object, or the judgment service being down). **Do not build that clause and do not call it
+     impossible.** The overall verdict is the WORST clause, so a question can be `unsure` while other
+     clauses are `yes`/`alternative`: build **the steps of the `yes`/`alternative` clauses** (their
+     numbers are in `clauses[].steps`) and stop at the `unsure` one. An `unsure` or `no` clause
+     contributes **no steps** of its own. `closest` names the candidates or what would resolve it —
+     usually a sharper question.
    `looked_at` is the trail (every family considered, with its score/margin and whether it was used);
    `provenance` is the corpus version, the pinned model, the registry version, the routing sample
    count and the measured `timing_ms`. Neither changes the answer — quote them when you report one.
