@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "pega-plan": {
+      "type": "local",
+      "command": [
+        "node",
+        "<absolute-path-to>/plugins/pega/blueprint-planner/mcp/pega-plan/server.mjs"
+      ],
+      "environment": {
+        "TYPESAFE_API_KEY": "{env:TYPESAFE_API_KEY}",
+        "PEGA_CORPUS_ROOT": "<absolute-path-to>/plugins/pega/infinity-ai-plugins/claude/resources/26-1"
+      },
+      "enabled": true
+    }
+  }
+}
