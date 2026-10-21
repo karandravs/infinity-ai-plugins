@@ -13,7 +13,7 @@ is left to the model to improvise — no measurable plan, no proof it's right.
 | Piece | What it does |
 |---|---|
 | **Blueprint maker** (`blueprint/`) | Playwright drives `pega.com/blueprint`: spec → Blueprint (case types, data model, systems, personas). |
-| **Planner** (`mcp/pega-plan/`, tool `plan_pega_build`) | A blueprint story → **plan**: which rules, **build order**, payloads, and the exact **`blanks`** (value / reference / entry) the agent fills. Reads the **plugin's own bundled corpus** — no duplication. |
+| **Planner** (`mcp/pega-plan/`, tool `plan_pega_change`) | A blueprint story or how-to question → **one defensible answer**: a `verdict` (`yes`/`alternative`/`no`/`unsure`), ordered `steps` (which rules, which order, payloads), `closest`, the `inputs_required` bill of materials, and the `unresolved` elements the agent resolves. Reads the **plugin's own bundled corpus** — no duplication, no env var. |
 
 **It never writes rules.** The **agent** + `pega-infinity-authoring` build. The workflow **ships with
 the MCP** (skill + prompt), not a bespoke agent prompt — so *any* agent can use it.
@@ -40,6 +40,7 @@ per industry: Banking 7/7 · Insurance 7/7 · Healthcare 7/7 · Telecom 7/7 · R
 
 + The shipped MCP surface (eval/mcp-proof.md) — the real server spawned over stdio:
   27/27 asserts · tool `plan_pega_build` + prompt `pega-build` + shipped skill, end-to-end
+  *(that snapshot predates the `plan_pega_change` contract — see `eval/demo-transcript.md`)*
 
 + Blueprint layer, offline (eval/blueprint-proof.md + `blueprint/verify-blueprint.mjs`) —
   recipes parse, refs resolve, selectors well-formed, the create→complete chain covers 7/7 sections,
@@ -62,9 +63,9 @@ maps to is **100% stable** across repeated calls (Jev's stochasticity only shows
 *margin*). The plan is an artifact an agent can execute; `verify` + `goalFit` grade it.
 
 ## Boundaries, stated honestly
-- **References** to non-existent rules are surfaced as `reference` blanks → the agent names real rules.
-- **Access** authoring (persona case/data access) is **not exposed** by the plugin → a **human step**.
-- Some rules are **version/corpus-dependent** (`resources/<ver>/`); set `PEGA_CORPUS` to match.
+- **References** to non-existent rules are surfaced as `unresolved` (`kind: reference`) → the agent names real rules.
+- **Access** authoring (persona case/data access) is **not exposed** by the plugin → a **human step** (`alternative`/`no`).
+- Some rules are **version/corpus-dependent** (`resources/<ver>/`); set `PEGA_CORPUS_ROOT` to match.
 - The **integration chain** routes + gates 16/16 and is now **grounded on the contracts** — the SOR the
   goal names, its real endpoint path, and goal-derived chain refs (refs 17; avgFit 0.49; weak-fit 1/16 —
   one connector whose noul is intrinsically low) — we publish the numbers rather than hide them.

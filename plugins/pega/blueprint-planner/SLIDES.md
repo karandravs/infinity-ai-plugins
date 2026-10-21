@@ -56,7 +56,7 @@ The workflow **ships with the MCP** (skill + prompt) — no bespoke agent prompt
 | Piece | What it does |
 |---|---|
 | **Blueprint maker** (`blueprint/`) | Playwright drives `pega.com/blueprint`: case types, data model, systems (OpenAPI), personas |
-| **Planner** (`mcp/pega-plan/`) | A story → **which rules, build order, payloads, and the exact `blanks`** to fill |
+| **Planner** (`mcp/pega-plan/`) | A story or question → **a verdict, ordered steps, payloads, and the exact `unresolved` elements** to resolve |
 | Reuses the plugin's **own corpus** | No vendored docs — the planner reads `claude/resources/26-1` |
 
 ---
@@ -99,7 +99,7 @@ stories 40 · planned 40/40 · composed 40/40 · verify-pass 40/40
 ```
 Blueprint layer, offline   15/15 asserts · 7/7 sections · every artifact→corpus family
 Shipped MCP surface        27/27 asserts — real server over stdio:
-                           tool plan_pega_build · prompt pega-build · shipped skill
+                           tool plan_pega_change · prompt pega-build · shipped skill
 Build path, offline        6 rules · verify PASS 6/6 (no live env needed)
 ```
 
@@ -137,7 +137,7 @@ refs: the data page names its connector + transforms  → agent points them at r
 
 ## Boundaries, stated honestly
 
-- **References** to rules that don't exist yet are surfaced as `reference` blanks → the agent resolves them.
+- **References** to rules that don't exist yet are surfaced as `unresolved` (`kind: reference`) → the agent resolves them.
 - **Access** authoring (persona case/data access) isn't exposed by the plugin → a **human step**.
 - 12/40 backlog stories hit a **capability gap** (no email/SSO/access family) → **flagged**, not faked.
 - Blueprint behaviour needing a **live browser** (DOM, login/import) is **not** among the offline asserts.
@@ -150,8 +150,8 @@ refs: the data page names its connector + transforms  → agent points them at r
 ```
 1. spec → Blueprint          (Playwright)
 2. import → Agile Workbench backlog (US-*)
-3. plan_pega_build("Configure Data Model - Dispute Record") → the plan, per rule
-4. the agent fills the blanks + create-rule (Authoring MCP) → rule in branch build_on
+3. plan_pega_change("How do I configure a dispute case with an SLA and a CRM lookup?") → verdict + steps
+4. the agent resolves the unresolved + create-rule (Authoring MCP) → rule in YOUR Change Request
 5. the evals → 100% primary-route stability · 40/40 backlog · 15/15 blueprint
 ```
 

@@ -9,7 +9,7 @@
       ],
       "environment": {
         "TYPESAFE_API_KEY": "{env:TYPESAFE_API_KEY}",
-        "PEGA_CORPUS": "<absolute-path-to>/plugins/pega/infinity-ai-plugins/claude/resources/26-1"
+        "PEGA_CORPUS_ROOT": "<absolute-path-to>/plugins/pega/infinity-ai-plugins/claude/resources/26-1"
       },
       "enabled": true
     },

@@ -4,7 +4,28 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
 
 ## [Unreleased]
 
+### Changed
+- **The tool is `plan_pega_change({ question, contracts_dir?, namespace? })`.** A free-text Pega
+  how-to question → ONE defensible answer: `verdict` (`yes`/`alternative`/`no`/`unsure`), `answer`,
+  `closest`, `partial`, per-`clauses` verdicts, ordered `steps` (payload + `provenance` + `checks` +
+  `unresolved` + `prerequisites`), `inputs_required`, `caveats`, `looked_at`, `provenance`.
+  **It writes nothing** — `out_dir`/`outPath`, the `plan_id` store, `values`/`fillPlan`, `sor_base_url`
+  and the old `coverage` flag are gone; every non-`yes` verdict names what to do instead.
+- **No branch prescription.** The planner names no branch and no Change Request: the caller supplies
+  the active Change Request when it builds with Pega's Authoring MCP.
+- **`checks` are structural only** (AJV schema + platform-truth pre-flight); the authoritative
+  validation of a payload is the **Infinity Authoring MCP's runtime validator**.
+- **Corpus discovery needs no env var**: the planner resolves the neighbouring
+  `infinity-ai-plugins/claude/resources/<ver>` corpus itself (`PEGA_CORPUS_ROOT` to override,
+  `PEGA_CORPUS` deprecated, `PEGA_GRAPH` ignored). Credentials come from the process environment —
+  **no `.env` reads** in the shipped `mcp/` or `lib/`.
+- **Licensing:** `LICENSE` (Pega Infinity AI Plugins License v1.0) + `NOTICE` (derived from Pega
+  Infinity AI Plugins © Pegasystems Inc., modified by the blueprint-planner authors).
+
 ### Added
+- **`eval/demo-transcript.md`** — five Pega how-to questions answered end to end (verdict, steps,
+  closest, inputs) by `plan_pega_change`; **`eval/head-to-head.md`** — planner vs the plugin baseline
+  on the same questions, with computed baseline metrics.
 - **`coverage` flag on the plan result**: a top-level `coverage` (`{ covered, capability, phrase, reason }`)
   plus a `caveats[]` entry when `covered:false` — an honest "no authoring rule family in the corpus declares
   this capability" signal (e.g. "Configure Email Account", "Configure SSO", access control). Advisory: a plan

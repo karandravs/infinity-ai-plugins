@@ -24,19 +24,24 @@ Ask the agent (or curl the MCP): *fetch the backlog* →
 
 ## 3 · Plan (the planner MCP) — the money shot — ~60s
 ```
-plan_pega_build({ query: "Configure Data Model - Dispute Record" })
+plan_pega_change({ question: "How do I configure a dispute case with an SLA and a CRM lookup?",
+                  namespace: "Disputes", contracts_dir: "contracts" })
 ```
-→ a plan, laid out **per rule**:
+→ **one answer**: a verdict + the steps, laid out **per rule**:
 ```
-obj-property · skill rules-rule-obj-property · example … · verify required-keys-present · goalFit …
-  payload keys: pyPropertyName, pyClassName, pyLabel, pyPropertyMode, …
-  references:   —            blanks: pyLabel (value), pyClassName (namespace)
+verdict: unsure (clauses 1-2 yes; clause 3 unsure — name which one it needs)
+steps:  1. Create the class  2. Create the case type  3. Create the service level
+  step 2 · obj-casetype · payload keys: pyLabel, pyClassName, pyStages, …
+  checks: schemaIssues [] · platformTruthIssues []   unresolved: pyClassName (reference)
+  inputs_required: flow, namespace
 ```
-Show a second one with **references** (e.g. an activity), and a **connector** (the API SOR
-integration, from `contracts/`).
+Ask a second one whose capability the corpus does not author (e.g. email account, SSO) — the answer is
+`no` with `closest`, not a plausible-looking plan. And a **connector** one (the API SOR integration,
+grounded in `contracts/`).
 
 ## 4 · Build (the *agent*, via Pega's Authoring MCP) — ~30s
-The agent **fills the plan's `blanks`**, then calls `create-rule` in **build order**, into the branch.
+The agent **resolves the `unresolved` elements / `inputs_required`**, then calls `create-rule` **in
+step order** — in the Change Request *you* have open (the planner prescribes no branch).
 Show one rule appear in the app. *(Needs a live env; the offline equivalent — the exact `create-rule`
 calls a plan yields, composed + schema-checked with no environment — is `eval/build-path.md`.)*
 
