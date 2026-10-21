@@ -34,30 +34,26 @@ don't write files or shell.
    - **`yes`** — every clause maps to authorable rule families. Build the steps.
    - **`alternative`** — part of it is authorable, or there is a supported Pega surface this tool
      does not author. Build the steps; the rest is in `closest` (and `partial`) — a human/config step.
-   - **`no`** — nothing in the corpus authors what was asked. **Do not build it.** `closest` **names
-     the absent capability** (`no authoring family for "<capability>"`) and why it is absent — it is a
-     diagnosis, not a recipe. Route it to a human.
-   - **`unsure`** — there is no evidence either way (near-cutoff routing, a clause that names no
-     object, or the judgment service being down). **Do not build that clause and do not call it
-     impossible.** The overall verdict is the WORST clause, so a question can be `unsure` while other
-     clauses are `yes`/`alternative`: build **the steps of the `yes`/`alternative` clauses** (their
-     numbers are in `clauses[].steps`) and stop at the `unsure` one. An `unsure` or `no` clause
-     contributes **no steps** of its own. `closest` names the candidates or what would resolve it —
-     usually a sharper question. A structural **prerequisite or dependent of the winning family is a
-     complement, never a competing candidate**: it is part of the same answer (and already a step), so
-     its routing score cannot make a clause `unsure`. A near-tie is likewise **broken by the words**:
-     when the clause names one family by its own artefact words (`flow`, `case type`, `connector`,
-     `decision table`, `SLA`, `property`, `view`, `notification`, `class`, …) and says nothing that
-     names the near runner-up, the named family wins and the clause is not `unsure`. The candidates an
-     `unsure` names are unrelated families the clause does **not** name — "a CRM lookup" is the
-     canonical case, and it stays `unsure`.
-   `looked_at` is the trail (every family considered, with its score/margin, whether it was used, and
-   its `role` — `candidate`, or `prerequisite`/`dependent` when it is a structural complement of the
-   winner and therefore was not weighed as a competitor);
-   `provenance` is the corpus version, the pinned model, the registry version, the routing sample
-   count and the measured `timing_ms`. Neither changes the answer — quote them when you report one.
+   - **`no`** — the clause asks for something no Pega rule type authors (the companion Noul `any` is
+     below 0.35). **Do not build it.** `closest` names the concept it came closest to and why it is
+     absent — it is a diagnosis, not a recipe. Route it to a human.
+   - **`unsure`** — the classification is not confident enough to name a rule. Three documented
+     reasons, each naming what would resolve it: the kind of work is unclear (`conceptConfidence`
+     < 0.5 — `closest` reports the PARENT: "this is a `<concept>` question (p=…); name which part",
+     listing that concept's families), the family is a coin flip (`separation` = top ÷ second < 1.2 —
+     `closest` names the top 2–3 families with their probabilities), or the judgment service is down.
+     **Do not build that clause and do not call it impossible.** The overall verdict is the WORST
+     clause, so a question can be `unsure` while other clauses are `yes`/`alternative`: build **the
+     steps of the `yes`/`alternative` clauses** (their numbers are in `clauses[].steps`) and stop at
+     the `unsure` one. An `unsure` or `no` clause contributes **no steps** of its own.
+   `looked_at.clauses[]` is the trail the verdict read: per clause the `concept` and its
+   `conceptConfidence`, the chosen `family` with its whole `familyProbs` distribution, the
+   `separation`, and the `any` Noul. `provenance` is the corpus version, the pinned model, the
+   registry version, the judgment-call count and the measured `timing_ms`. Neither changes the answer
+   — quote them when you report one.
 4. **Read the `steps[]`, in order.** Each step has `n`, a `title`, `rule` (family, skill, example,
-   routing score/margin — `null` for a structural prerequisite), a composed `payload`, `provenance`,
+   concept, the family's probability and the distribution's `separation` — `null` for a structural
+   prerequisite), a composed `payload`, `provenance`,
    `prerequisites` (step numbers, always smaller than its own), `checks` and `unresolved`.
    **A step is only buildable when it carries a `payload`.** Three cases do not: `kind: "manual"` or
    `"config"` (a Pega surface this tool does not author — `why` says so; do it by hand), and a

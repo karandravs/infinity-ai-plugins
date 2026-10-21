@@ -13,8 +13,11 @@
 // ONE LEVEL ONLY: resolvePrereqs returns the DIRECT prerequisites of what it was given. A caller
 // that needs second-order prerequisites must re-resolve over the returned `steps` itself — this
 // module never walks the chain, so an answer stays auditable and a cycle cannot loop.
-// structuralClosure is the same fact read both ways (what a family needs AND what needs it), which is
-// how the answer assembly tells a dependency apart from a competing candidate.
+//
+// THIS TABLE NO LONGER DECIDES ANY VERDICT. It used to break routing near-ties by calling two
+// families "complements" rather than competitors; the verdict is now read from the taxonomy
+// distribution (verdict-lib.mjs), so the table's only job is the one it is qualified for: the ORDER
+// of the steps and what the caller must supply before building.
 //
 // Pure: no imports, no corpus read, no graph load. The table is the whole declaration; a family
 // without an entry needs nothing (never invent edges to look helpful).
@@ -83,25 +86,4 @@ export function resolvePrereqs(families) {
     steps: [...steps].sort(),
     inputs: [...inputs].map(([name, why]) => ({ name, why })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
   };
-}
-
-// The COMPLEMENTS of one family: itself, what it NEEDS, and what NEEDS IT — one level each way, from
-// the same table (no walk, so no cycle and nothing invented). A caller uses this to tell a dependency
-// apart from a COMPETITOR: two families in one closure are parts of a single answer, so a near-cutoff
-// score on one is not a disagreement about WHAT to build. A `mustExist` artefact is not a family and
-// never enters the closure. Returns bare names, the input family included; an unknown (or blank)
-// family closes over itself (or nothing), never over invented edges.
-export function structuralClosure(family) {
-  const self = bareName(family);
-  if (!self) return new Set();
-  const out = new Set([self]);
-  for (const need of STRUCTURAL_PREREQS[self]?.needs || []) {
-    const p = bareName(need);
-    if (p && p !== self) out.add(p);
-  }
-  for (const [fam, entry] of Object.entries(STRUCTURAL_PREREQS)) {
-    if (fam === self) continue;
-    if ((entry.needs || []).some((n) => bareName(n) === self)) out.add(fam);
-  }
-  return new Set([...out].sort());
 }

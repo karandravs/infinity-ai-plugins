@@ -1,65 +1,64 @@
-// verdict-lib.mjs — the decision layer: per-clause routing evidence → ONE defensible verdict.
+// verdict-lib.mjs — the decision layer: a taxonomy classification per clause → ONE defensible verdict.
 //
-// The planner's answer is only as good as the distinction it draws between three very different
-// situations that all look like "nothing found":
-//   * positive evidence of absence — the clause asks for a capability nothing in the corpus authors
-//     (and the registry offers no config/manual path)                → `no`
-//   * evidence that is not good enough — routing sits on the cutoff, the family cannot be composed,
-//     two candidates disagree about authorability, or the judgment service is down → `unsure`
-//   * a supported path that is not this tool's to author — the registry names the App Studio /
-//     manual step                                             → `alternative`
+// WHAT CHANGED, AND WHY. This module used to decide with six hand-rolled thresholds over 37
+// independent noul scores per clause: a routing `floor`, a `cutoff` (top − margin), a `band` of
+// leniency, a `tie` window, lexical support (did the clause NAME the family?), structural closure
+// (is the near family a prerequisite/dependent of the winner?) and a sub-floor exemption. Every one
+// of those was a calibration knob fitted to the corpus, and together they made the answer flip
+// between samples on questions that had not changed.
 //
-// AUTHORABILITY IS EVIDENCE, NOT A TABLE. A capability is authorable when a routed family carries
-// BOTH a schema and an example payload. `capabilities.json` holds ONLY non-authorable capabilities
-// (`kind: "config" | "manual"`) and can therefore only tell decide() what to offer INSTEAD. It can
-// downgrade a verdict; it can never manufacture a `no` (spec §The verdict model, rev 1's fatal flaw).
+// The router is now a two-level Choice (taxonomy-lib.mjs): the model returns a full probability
+// distribution per level, its own `confidence`, and — for the "is this even a Pega authoring goal?"
+// question — a companion Noul. The verdict reads those numbers and nothing else:
+//   * `conceptConfidence` is the model's own confidence in the KIND of work (level 1);
+//   * `separation = p1 / p2` over the family distribution is the documented ambiguity metric
+//     (docs.typesafe.ai/cookbooks/hierarchical_classification: "near 1× is ambiguous, a large ratio
+//     means clear separation");
+//   * `any` is the Noul that pairs with the unreliable `none_of_these` option
+//     (docs.typesafe.ai/primitives/choice: "a `none of the above` option may not work well … ask a
+//     companion Noul and read the Choice only when the Noul says yes").
 //
-// PRECEDENCE — per clause, first match wins (spec §Precedence, controller ruling D4):
-//   1. the clause's routing failed (jevDown)                         → unsure
-//   2. zero routed families above the cutoff:
-//        registry hit                                               → alternative
-//        the clause names no capability (ambiguous)                  → unsure
-//        the clause names a capability                               → no  (positive absence)
-//   3. any routed family AT/ABOVE THE ROUTING FLOOR within NEAR_CUTOFF
-//      of the cutoff (R18: a sub-floor family is not a candidate)  → unsure
-//      …unless the clause NAMES the winner and not the near family: the words already decided it
-//      (namedFamilyWins), so a named family cannot lose a near-tie to an unnamed one
-//   4. the best-routed family has no schema or no example            → unsure
-//   5. the top two candidates are tied within TIE **and disagree on
-//      authorability** (so the tie decides the verdict)              → unsure
-//   6. registry hit                                                 → alternative (downgrade cap)
-//   7. a lower-routed family cannot be composed                     → alternative (supported subset)
-//   8. otherwise (every routed family is composable)                → yes
+// PRECEDENCE — per clause, first match wins:
+//   1. the classification failed (jevDown)                                  → unsure
+//   2. any.noul < 0.35 — it does not ask for something an authoring
+//      family builds                                                       → no
+//        `closest` names the concept it is closest to.
+//   3. conceptConfidence < 0.5 — the KIND of work is unclear                → unsure
+//        `closest` reports the PARENT: "this is a `<concept>` question (p=…); name which part",
+//        listing that concept's families. A `none_of_these` winner says so instead.
+//   4. family separation < 1.2 — two families are a coin flip              → unsure
+//        `closest` names the top 2–3 families with their probabilities.
+//   5. the `security` concept (access / SSO) — a supported surface this
+//      corpus authors no rule for, so the registry says what to do instead → alternative
+//   6. otherwise — a confident concept and a clearly separated family      → yes
+//        the chosen family is the answer.
 //
-// MERGE — the overall verdict is the WORST clause (`no` > `unsure` > `alternative` > `yes`), with
-// one exception (ruling D5): a `no` clause cannot stand beside an answerable clause and call the
-// whole question impossible — part of it IS answerable, so the question is `alternative` and the
-// unsupported part is named in `closest`. A multi-clause question's per-clause verdicts stay intact
-// in `perClause`.
+// WHAT IS *NOT* A VERDICT INPUT ANY MORE: routing scores, cutoffs, margins, bands, ties, whether the
+// clause spells the family's name, whether two families are structural complements, and whether a
+// score sits under a floor. The structural prerequisite table (prereq-lib.mjs) still decides the
+// ORDER of the steps and what must exist first — it no longer decides the verdict.
 //
-// Three deliberate reading decisions, all documented here so a reviewer can challenge them:
-//   * AMBIGUOUS ≠ ABSENT. `no` requires more than an empty routed set: the clause must NAME a
-//     capability. "make it fly" names no capability at all, and silence about a goal we could not
-//     parse is not evidence of absence (spec §Verdict model: "ambiguous clause → unsure"). The
-//     caller supplies `capability: null` for such a clause; extraction is a routing concern, not
-//     this module's.
-//   * A TIE ONLY MATTERS WHEN IT DECIDES THE ANSWER. Two candidates tied within TIE that are BOTH
-//     composable are not a coin flip — the plan composes both. A tie between a composable and a
-//     non-composable candidate is, because the verdict flips with the routing wobble (anti-goal:
-//     "hiding routing instability behind an averaged score").
-//   * "A ROUTED FAMILY LACKS SCHEMA OR EXAMPLE" (D4 row 3) is applied to the family the answer
-//     RESTS ON — the best-routed one. A secondary family that cannot be composed cannot erase a
-//     composable top, so it downgrades the clause to `alternative` with the supported subset named
-//     (D3: "or the supported subset description"); leaving the whole clause `unsure` would throw
-//     away a plan we can actually review. Nothing composable at the top is `unsure`, as ruled.
+// MERGE — the overall verdict is the WORST clause (`no` > `unsure` > `alternative` > `yes`), with one
+// exception: a `no` clause beside an answerable clause cannot make the whole question impossible —
+// part of it IS answerable, so the question is `alternative` and the unsupported part is named in
+// `closest`. A multi-clause question's per-clause verdicts stay intact in `perClause`.
 //
-// decide() IS PURE: no model call, no file read, no mutation of its inputs. registryValid() reads
-// the corpus (read-only) to catch registry drift; nothing here ever writes.
+// decide() IS PURE: no model call, no file read, no mutation of its inputs. registryValid() reads the
+// corpus (read-only) to catch registry drift; nothing here ever writes.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-export const NEAR_CUTOFF = 0.05; // spec: `margin < band` is a near-cutoff clause
-export const TIE = 0.05;         // spec: two candidates within `tie` are a routing coin flip
+import { CONCEPT_FAMILIES } from "./taxonomy-lib.mjs";
+
+// The three documented decision points. Each is a NAME for a published rule, not a fitted knob:
+//   ANY_FLOOR         a Noul is read as "yes" from 0.5; 0.35 is the "not even close" end of it.
+//   CONCEPT_FLOOR     the model's own `confidence` below which the docs say "treat a low-confidence
+//                     answer as a reason to ask rather than act" (docs/primitives/choice, 0.5).
+//   SEPARATION_FLOOR  a top/second ratio under 1.2 is the cookbook's "near 1× is ambiguous".
+export const ANY_FLOOR = 0.35;
+export const CONCEPT_FLOOR = 0.5;
+export const SEPARATION_FLOOR = 1.2;
+
 export const KINDS = ["config", "manual"];
 export const CAPABILITIES_URL = new URL("./capabilities.json", import.meta.url);
 
@@ -67,24 +66,14 @@ const SEVERITY = { yes: 0, alternative: 1, unsure: 2, no: 3 };
 const str = (v) => String(v ?? "").trim();
 // Coerce what a caller actually hands over: a numeric string ("0.9" out of a JSON payload) is a
 // number, not a missing value. Anything unparseable falls back to `d` — never silently to 0.
+// `Infinity` is a VALID separation (a single-peak distribution has nothing to be ambiguous with), so
+// it is preserved rather than read as "missing".
 const num = (v, d = 0) => {
+  if (v === Infinity) return Infinity;
   if (Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
   return d;
 };
-const isAuthorable = (r) => !!(r && r.hasSchema === true && r.hasExample === true);
-
-// R18: A FAMILY BELOW THE ROUTING FLOOR IS NOT A CANDIDATE. The floor is the router's absolute
-// "this goal requires X" threshold; a family scoring under it is noise the recall-oriented
-// shortlist kept for context, not a candidate whose selection could flip. Jitter around a
-// sub-floor score must therefore never manufacture `unsure` — the clause falls back to its
-// evidence-free rows (`no` when it names a concrete capability, `unsure` only when it names none).
-// `floor` is ROUTING DATA, carried with the evidence; a caller that reports no floor keeps every
-// family it supplied (the rule then cannot be applied, so nothing is silently dropped).
-export function routedAboveFloor(routed, floor) {
-  const list = Array.isArray(routed) ? routed.filter(Boolean) : [];
-  return Number.isFinite(floor) ? list.filter((r) => num(r.score) >= floor) : list;
-}
 
 // The shipped registry, parsed on demand. It is a plain array of entries; keeping the file an array
 // means `decide(clauses, registry)` takes exactly what the file contains (no wrapper to unwrap).
@@ -93,7 +82,7 @@ export function loadRegistry(url = CAPABILITIES_URL) {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-// The registry entry a clause's capability resolves to: the capability key itself, or any alias.
+// The registry entry a capability resolves to: the capability key itself, or any alias.
 // Case-insensitive, because callers hand back whatever the question said ("Access Group").
 function entryFor(capability, registry) {
   const key = str(capability).toLowerCase();
@@ -117,8 +106,6 @@ function closestOf(entry) {
   return out;
 }
 
-// A registry-derived `closest`. `closestOf` can only fail for a hand-built registry that skipped the
-// shape check (the shipped file is validated), so the fallback stays honest rather than throwing.
 function registryClosest(entry) {
   return closestOf(entry) || { what: "the registered manual step", why: "the registry lists a path this tool does not author" };
 }
@@ -131,249 +118,164 @@ export function describeClosest(closest) {
   return `${closest.what}${why}${src}`;
 }
 
-// A routed family as the ARTEFACT it authors, for the `unsure` text. The router works in FAMILY
-// names ("connect-rest", "declare-pages"); a reader needs the Pega artefact ("a connector", "a data
-// page"). Presentation only — nothing decides on it — so an unlisted family falls back to its own
-// words. (R14: an `unsure` verdict must NAME the competing candidates.)
+// A family as the ARTEFACT it authors, for the `unsure` text. The taxonomy works in family names
+// ("obj-casetype"); a reader needs the Pega artefact ("a case type"). Presentation only — nothing
+// decides on it — so an unlisted family falls back to its own words rather than fake English.
 const FAMILY_NOUN = {
-  "connect-rest": "a connector",
-  "connect-soap": "a SOAP connector",
-  "connect-sql": "an SQL connector",
+  "admin-system-settings": "an application setting",
+  "ai-agent": "an AI agent",
+  "ai-tool": "an AI tool",
+  "async-jobscheduler": "a job scheduler",
+  "async-queueprocessor": "a queue processor",
+  classmetadata: "class metadata",
+  "connect-generativeai": "a GenerativeAI connector",
+  "connect-rest": "a REST connector",
+  corrtype: "a correspondence type",
+  "decision-dataset": "a data set",
+  "declare-decision-table": "a decision table",
   "declare-pages": "a data page",
-  "obj-casetype": "a case type",
-  "obj-servicelevel": "a service-level agreement",
-  "obj-flow": "a flow",
-  "obj-model": "a data transform",
+  "edit-validate": "an edit validate",
+  notification: "a notification",
   "obj-activity": "an activity",
-  "obj-property": "a property",
+  "obj-attachmentcategory": "an attachment category",
+  "obj-casetype": "a case type",
   "obj-class": "a class",
   "obj-corr": "a correspondence rule",
-  "declare-decision-table": "a decision table",
+  "obj-fieldvalue": "a field value",
+  "obj-flow": "a flow",
+  "obj-flowaction": "a flow action",
+  "obj-model": "a data transform",
+  "obj-property": "a property",
+  "obj-report-definition": "a report definition",
+  "obj-servicelevel": "a service-level agreement",
+  "obj-validate": "a validate rule",
+  "obj-when": "a when condition",
+  "ruleset-branch": "a ruleset branch",
+  "ruleset-name": "a ruleset name",
+  "ruleset-version": "a ruleset version",
+  "service-mcp": "an MCP service",
+  "test-application-businessaction": "a business action",
+  "test-application-case": "an application test",
+  "test-unit-case": "a PegaUnit test",
+  "ui-theme": "a theme",
   "ui-view": "a UI view",
 };
 export function familyNoun(family) {
   const bare = str(family).replace(/^rules-rule-/, "");
   if (FAMILY_NOUN[bare]) return FAMILY_NOUN[bare];
-  // An unlisted family reads as "the obj-flowaction family", never as a manufactured phrase
-  // ("a obj flowaction"): the reader needs the family's own name to act on, not fake English.
-  return bare ? `the ${bare} family` : "a routed family";
+  return bare ? `the ${bare} family` : "a family";
 }
 
-// ---- LEXICAL SUPPORT: does the clause NAME this family? ----
-// The router works in FAMILY names ("obj-flow", "declare-pages"); a user writes the ARTEFACT ("flow",
-// "decision table", "SLA"). This table is the bridge between the two, and it exists for exactly ONE
-// decision: breaking a near-tie (precedence row 3). A family the clause names by its own words is not
-// in a coin flip with a family the clause does not name.
-//
-// The table is deliberately CURATED and conservative: an unlisted family has no lexical forms, so a
-// tie involving it stays a tie. Over-claiming support would silently erase genuine ambiguity, which
-// is the failure this table is meant to avoid, not create.
-const FAMILY_LEXICAL = {
-  "obj-flow": ["flow", "flows"],
-  "obj-flowaction": ["flow action", "flow actions"],
-  "obj-casetype": ["case type", "case types", "casetype", "work type", "work types"],
-  "connect-rest": ["rest", "rest connector", "rest service", "connector"],
-  "connect-soap": ["soap", "soap connector", "soap service"],
-  "connect-sql": ["sql", "sql connector"],
-  "connect-generativeai": ["generative ai", "genai"],
-  "declare-pages": ["data page", "data pages"],
-  "declare-decision-table": ["decision table", "decision tables"],
-  "decision-dataset": ["decision data set", "data set", "decision dataset"],
-  "obj-servicelevel": ["service level", "service levels", "sla", "slas", "service level agreement", "service-level agreement"],
-  "obj-property": ["property", "properties"],
-  "obj-class": ["class", "classes"],
-  classmetadata: ["class", "classes"],
-  "obj-model": ["data transform", "data transforms"],
-  "obj-activity": ["activity", "activities"],
-  "obj-corr": ["correspondence", "correspondence rule", "correspondence rules"],
-  corrtype: ["correspondence type", "correspondence types"],
-  notification: ["notification", "notifications"],
-  "ui-view": ["view", "views", "ui view", "ui views"],
-  "ui-theme": ["theme", "themes"],
-  "obj-report-definition": ["report definition", "report definitions", "report"],
-  "obj-validate": ["validation", "validate"],
-  "edit-validate": ["edit validate", "edit validation"],
-  "obj-when": ["when condition", "when rule"],
-  "obj-fieldvalue": ["field value", "field values"],
-  "obj-attachmentcategory": ["attachment category"],
-  "service-mcp": ["mcp service", "service mcp"],
-  "ai-agent": ["ai agent", "ai agents"],
-  "ai-tool": ["ai tool", "ai tools"],
-  "async-jobscheduler": ["job scheduler", "scheduled job", "scheduler"],
-  "async-queueprocessor": ["queue processor"],
-  "ruleset-version": ["ruleset version"],
-  "ruleset-branch": ["ruleset branch"],
-  "ruleset-name": ["ruleset name", "ruleset"],
-  "test-unit-case": ["unit test", "pegaunit test"],
-  "test-application-case": ["application test", "end-to-end test"],
-};
-
-const ARTICLE = /^(?:a|an|the)\s+/i;
-// Compare in one normal form: case, hyphens/underscores/slashes as spaces, one space between words.
-// "service-level agreement" and "service level agreement" are the same phrase to a reader.
-const normaliseWords = (text) => str(text).toLowerCase().replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const phraseIn = (form, text) => new RegExp(`(?<![a-z0-9])${escapeRe(form)}(?![a-z0-9])`).test(text);
-
-// Memoised: the forms of a family never change, and familyNamedIn runs per candidate per clause.
-const _familyForms = new Map();
-export function familyLexicalForms(family) {
+// "a data page (`declare-pages`)" — the artefact AND the family name, so a reader can act on it.
+export function familyLabel(family) {
   const bare = str(family).replace(/^rules-rule-/, "");
-  if (_familyForms.has(bare)) return _familyForms.get(bare);
-  const forms = new Set([normaliseWords(bare)]); // a caller that names the family verbatim
-  for (const form of FAMILY_LEXICAL[bare] || []) forms.add(normaliseWords(form));
-  // the artefact noun is the same table the `unsure` text uses, so the two cannot drift
-  if (FAMILY_NOUN[bare]) forms.add(normaliseWords(FAMILY_NOUN[bare].replace(ARTICLE, "")));
-  const out = [...forms].filter((form) => form.length > 2);
-  _familyForms.set(bare, out);
-  return out;
+  if (!bare) return "a family";
+  const noun = familyNoun(bare);
+  return noun === `the ${bare} family` ? noun : `${noun} (\`${bare}\`)`;
 }
 
-// → true when the clause text contains one of the family's own artefact words as a whole phrase.
-export function familyNamedIn(text, family) {
-  const t = normaliseWords(text);
-  if (!t) return false;
-  return familyLexicalForms(family).some((form) => phraseIn(form, t));
+// The families a concept owns, most relevant first (taxonomy-lib's presentation mapping).
+export function conceptFamilies(concept) {
+  return [...(CONCEPT_FAMILIES[str(concept)] || [])];
 }
 
-// A NEAR-TIE BETWEEN A NAMED FAMILY AND AN UNNAMED ONE IS NOT A TIE (precedence row 3).
-// Row 3 exists because two candidates that both fit make the answer a coin flip — but only when the
-// clause does not SAY which one it means. When the clause names the top family by its own words
-// ("…an approval flow where…") and says nothing that names the near runner-up, the answer is the
-// named one: the wobble in the unnamed family's margin is not a disagreement about what to build.
-// Three guards keep the genuine ambiguity intact (the flagship's "a CRM lookup"):
-//   * BOTH sides must be decided by the words — top named, near family NOT named;
-//   * the near family must not BE the top: a top sitting on the cutoff is a near-threshold signal in
-//     its own right, and naming it does not make it a hit;
-//   * row 5 (a tie that decides AUTHORABILITY) is untouched: whether the runner-up can be composed
-//     is a fact about the corpus that the clause's wording does not change.
-function namedFamilyWins(text, top, near) {
-  if (!top || !near) return false;
-  if (str(near.family) === str(top.family)) return false;
-  return familyNamedIn(text, top.family) && !familyNamedIn(text, near.family);
+// The top `n` options of a probability distribution, with their probabilities. Deterministic:
+// probability descending, then option name ascending — never the order the options were sent in.
+export function topProbabilities(probabilities, n = 3) {
+  return Object.entries(probabilities || {})
+    .map(([option, p]) => [option, num(p)])
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .slice(0, n);
 }
 
-// The competing candidates an `unsure` clause must name: the artefacts its routed families author,
-// each with its family name so the reader can act on it. Ordered by routing score (the input order).
-function candidateText(routed) {
-  const seen = [];
-  for (const r of routed) {
-    const fam = str(r?.family);
-    if (!fam) continue;
-    const label = `${familyNoun(fam)} ("${fam}")`;
-    if (!seen.includes(label)) seen.push(label);
-  }
-  return seen;
+const pct = (p) => `p=${num(p).toFixed(2)}`;
+
+// "a case type (`obj-casetype`) 0.52, a flow (`obj-flow`) 0.31" — the candidates an `unsure` clause
+// names (R14: an unsure verdict must name what it cannot choose between).
+function candidatesText(probabilities, n = 3) {
+  return topProbabilities(probabilities, n)
+    .filter(([, p]) => p > 0)
+    .map(([family, p]) => `${familyLabel(family)} ${p.toFixed(2)}`)
+    .join(", ");
 }
 
 // ---- per-clause decision: the precedence table above, in code ----
 function decideClause(clause, registry) {
   const text = str(clause?.text);
-  const capability = str(clause?.capability) || null;
-  // R18: only families at or above the routing floor are candidates (see routedAboveFloor).
-  const routed = routedAboveFloor(clause?.routed, clause?.floor);
-  const entry = entryFor(capability, registry);
-  const base = { text, capability, authorable: [] };
+  const c = clause?.classification || null;
+  const base = { text, concept: c?.concept || null, family: c?.family || null, authorable: [] };
 
-  // 1. the judgment service. A routing failure is not evidence either way (spec: Jev unavailable).
-  if (clause?.jevDown === true) {
+  // 1. the judgment service. A classification failure is not evidence either way.
+  if (clause?.jevDown === true || !c) {
     return { ...base, verdict: "unsure", signal: "jev-down",
-      closest: { what: "a working judgment service (retry when routing is available)",
-        why: "routing could not be scored, so this clause has no evidence either way" } };
+      closest: { what: "a working judgment service (retry when classification is available)",
+        why: "the clause could not be classified, so it has no evidence either way" } };
   }
 
-  // 2. zero routed families above the cutoff — the only branch that can produce `no`.
-  if (!routed.length) {
+  const any = num(c.any);
+  const conceptConfidence = num(c.conceptConfidence);
+  const separation = num(c.separation);
+
+  // 2. it does not ask for something an authoring family builds — positive evidence of absence, and
+  //    the concept it came closest to is named so the answer is not a bare "no".
+  if (any < ANY_FLOOR) {
+    const near = c.concept
+      ? `the closest concept is \`${c.concept}\` (${pct(c.conceptProbs?.[c.concept] ?? conceptConfidence)})`
+      : `no concept fits either (none_of_these ${pct(c.conceptProbs?.none_of_these)})`;
+    return { ...base, verdict: "no", signal: "no-authoring-family",
+      closest: { what: `no Pega authoring family builds "${text}" — ${near}`,
+        why: `the clause asks for something no Pega rule type authors (any = ${any.toFixed(2)} < ${ANY_FLOOR}), so this is an absence, not an unhandled case` } };
+  }
+
+  // 3. the KIND of work is unclear. Report the parent: the concept the model did pick (with its
+  //    probability) and the parts that concept contains, so the caller can name which one it means.
+  if (conceptConfidence < CONCEPT_FLOOR) {
+    if (!c.concept) {
+      const near = topProbabilities(c.conceptProbs, 2).filter(([k]) => k !== "none_of_these");
+      return { ...base, verdict: "unsure", signal: "concept-ambiguous",
+        closest: { what: `which part of Pega this is — the model put ${pct(c.conceptProbs?.none_of_these)} on "none of these concepts"` +
+            (near.length ? ` and its nearest concept is \`${near[0][0]}\` (${pct(near[0][1])})` : "") +
+            `; say what the case should DO`,
+          why: `no Pega authoring concept was identified confidently enough (best ${conceptConfidence.toFixed(2)} < ${CONCEPT_FLOOR}), so naming a family would be a guess` } };
+    }
+    const parts = conceptFamilies(c.concept).slice(0, 3);
+    return { ...base, verdict: "unsure", signal: "concept-ambiguous",
+      closest: { what: `which part of \`${c.concept}\` this is — it is a \`${c.concept}\` question (${pct(c.conceptProbs?.[c.concept] ?? conceptConfidence)})` +
+          (parts.length ? `, and its parts are ${parts.map(familyLabel).join(", ")}` : "") +
+          `; name which one the goal needs`,
+        why: `the kind of work is not settled (concept confidence ${conceptConfidence.toFixed(2)} < ${CONCEPT_FLOOR}), so the family below it cannot be trusted` } };
+  }
+
+  // 4. two families are a coin flip: the verdict would flip with the distribution.
+  if (separation < SEPARATION_FLOOR) {
+    return { ...base, verdict: "unsure", signal: "family-ambiguous",
+      closest: { what: `a clearer statement of the goal — this clause could be ${candidatesText(c.familyProbs, 3)}; name which one it needs`,
+        why: `the top two families are not separated (top/second = ${separation.toFixed(2)} < ${SEPARATION_FLOOR}), so which one is the answer is a coin flip` } };
+  }
+
+  // 5. the security concept: access and SSO are supported Infinity surfaces that this corpus authors
+  //    no rule for. The registry says what to do instead — a downgrade, never a `no`.
+  if (c.concept === "security") {
+    const entry = entryFor(clause?.capability, registry) || entryFor("access", registry);
     if (entry) {
       return { ...base, verdict: "alternative", signal: "registry",
         closest: registryClosest(entry),
         partial: { planable: 0, manual: 1, missing: 0 } };
     }
-    if (!capability) {
-      return { ...base, verdict: "unsure", signal: "ambiguous",
-        closest: { what: "a goal that names what to build",
-          why: "this clause names no capability, so absent routing evidence is not evidence of absence" } };
-    }
-    return { ...base, verdict: "no", signal: "evidence-absent",
-      closest: { what: `no authoring family for "${capability}"`,
-        why: "nothing routed above the cutoff and the registry lists no config or manual path, so the capability is absent — not merely unhandled" } };
   }
 
-  const ranked = [...routed].sort((a, b) => num(b.score) - num(a.score));
-  const top = ranked[0];
-
-  // 3. near cutoff: the family is a coin flip, so the verdict would be too. This row runs only on
-  //    families AT OR ABOVE the routing floor (R18 dropped the sub-floor ones above), i.e. on real
-  //    candidates whose selection could flip. A routed family that does not report a margin is
-  //    treated as sitting ON the cutoff (0), not as safely clear of it. The candidates are NAMED
-  //    (R14): "a CRM lookup could be a connector or a data page".
-  //    EXCEPT when the clause NAMES the winner (namedFamilyWins): a near-tie between a family the
-  //    clause names and one it does not is not a coin flip — the words already decided it.
-  const near = ranked.find((r) => num(r.margin, 0) < NEAR_CUTOFF);
-  if (near && !namedFamilyWins(text, top, near)) {
-    const cands = candidateText(routed);
-    const what = cands.length > 1
-      ? `a clearer statement of the goal — this clause could be ${cands.slice(0, 4).join(" or ")}; name which one it needs`
-      : `a clearer statement of the goal, or a re-run of routing for "${str(near.family) || "the routed family"}"`;
-    return { ...base, verdict: "unsure", signal: "near-cutoff",
-      closest: { what,
-        why: `it sits on the cutoff (score ${num(near.score).toFixed(2)}, margin ${num(near.margin).toFixed(2)} < ${NEAR_CUTOFF}), so membership flips between samples` } };
-  }
-
-  // 4. the best candidate cannot be composed: no schema, or no example payload to learn from.
-  if (!isAuthorable(top)) {
-    const missing = [top.hasSchema ? null : "a schema", top.hasExample ? null : "an example payload"].filter(Boolean).join(" and ");
-    const others = candidateText(ranked.slice(1));
-    const alt = others.length ? ` — the other routed candidates are ${others.slice(0, 3).join(" or ")}` : "";
-    return { ...base, verdict: "unsure", signal: "not-composable",
-      closest: { what: `a corpus ${missing} for "${str(top.family) || "the routed family"}"${alt}`,
-        why: "the best-routed family has no composable payload, so a plan cannot be reviewed against anything" } };
-  }
-
-  const authorable = ranked.filter(isAuthorable);
-  const gaps = ranked.filter((r) => !isAuthorable(r));
-
-  // 5. a tie that decides authorability: the answer flips with the routing wobble.
-  const second = ranked[1];
-  if (second && num(top.score) - num(second.score) <= TIE && isAuthorable(second) !== isAuthorable(top)) {
-    const [first, next] = candidateText([top, second]);
-    return { ...base, verdict: "unsure", signal: "tied",
-      closest: { what: `a disambiguation between ${first || `"${str(top.family)}"`} and ${next || `"${str(second.family)}"`} (say which one the goal actually needs), or a re-run of routing`,
-        why: `they are tied within ${TIE} and disagree on authorability (score ${num(top.score).toFixed(2)} vs ${num(second.score).toFixed(2)}), so which one is the answer is a coin flip` } };
-  }
-
-  // 6. the registry caps the clause at `alternative`: the capability itself is not authorable, and a
-  //    routed lookalike does not change that. Downgrade-only — never a `no`.
-  if (entry) {
-    return { ...base, verdict: "alternative", signal: "registry", authorable: authorable.map((r) => str(r.family)),
-      closest: registryClosest(entry),
-      partial: { planable: authorable.length, manual: 1, missing: 0 } };
-  }
-
-  // 7. part of the clause is composable, part of it is not: a supported subset.
-  if (gaps.length) {
-    const families = authorable.map((r) => str(r.family)).filter(Boolean);
-    return { ...base, verdict: "alternative", signal: "supported-subset", authorable: families,
-      closest: { what: `a plan for the authorable part only: ${families.join(", ")}`,
-        why: `${gaps.map((r) => str(r.family) || "a routed family").join(", ")} routed with this clause but has no schema and example to compose from` },
-      partial: { planable: families.length, manual: 0, missing: gaps.length } };
-  }
-
-  // 8. every routed family is composable. `partial` stays null: the documented contract is that only
-  //    an `alternative` clause carries one (there is nothing partial about a `yes`).
-  return { ...base, verdict: "yes", signal: "authorable", closest: null,
-    authorable: authorable.map((r) => str(r.family)) };
+  // 6. a confident concept and a clearly separated family: the family is the answer.
+  return { ...base, verdict: "yes", signal: "classified", closest: null,
+    authorable: [c.family].filter(Boolean) };
 }
 
 // ---- decide: per-clause verdicts → one overall verdict ----
 // → { verdict, closest, partial, perClause, evidenceAbsent }
-//   closest        null only for `yes`; { what, why, source? } otherwise (ruling D3)
+//   closest        null only for `yes`; { what, why, source? } otherwise
 //   partial        CLAUSE COUNTS, only for `alternative`, else null:
 //                    planable = clauses answered `yes`, manual = clauses downgraded to
 //                    `alternative`, missing = clauses with positive evidence of absence.
-//                    (A per-clause `partial` carries the finer step/part detail, and exists only
-//                    on an `alternative` clause — the contract the return shape documents.)
-//   perClause      [{ text, capability, verdict, signal, closest, authorable, partial? }]
+//   perClause      [{ text, concept, family, verdict, signal, closest, authorable, partial? }]
 //   evidenceAbsent clause texts with positive evidence of absence (feeds `looked_at.evidence_absent`)
 export function decide(clauses = [], registry = []) {
   const list = Array.isArray(clauses) ? clauses : [];
@@ -387,22 +289,22 @@ export function decide(clauses = [], registry = []) {
 
   // worst clause wins (no > unsure > alternative > yes)
   const worst = perClause.reduce((w, c) => (SEVERITY[c.verdict] > SEVERITY[w] ? c.verdict : w), "yes");
-  // ruling D5: a `no` clause beside an answerable clause is a supported subset, not an impossibility.
+  // a `no` clause beside an answerable clause is a supported subset, not an impossibility.
   const answerable = perClause.some((c) => c.verdict === "yes" || c.verdict === "alternative");
   const downgraded = worst === "no" && perClause.length > 1 && answerable;
   const verdict = downgraded ? "alternative" : worst;
 
   let closest = null;
   if (verdict !== "yes") {
-    // The driver is chosen from the PRE-DOWNGRADE verdicts: after a D5 downgrade there is no clause
-    // whose verdict is `alternative` yet, and looking one up would mask the `no` clause that is the
-    // whole reason the question is not a `yes`.
+    // The driver is chosen from the PRE-DOWNGRADE verdicts: after a downgrade there is no clause whose
+    // verdict is `alternative` yet, and looking one up would mask the `no` clause that is the whole
+    // reason the question is not a `yes`.
     const driver = perClause.find((c) => c.verdict === worst) || perClause[0];
     closest = driver.closest || null;
     if (downgraded && driver.verdict === "no") {
       const subset = perClause.filter((c) => c.verdict === "yes" || c.verdict === "alternative").map((c) => c.text).filter(Boolean);
       closest = { what: `the answerable subset only: ${subset.join("; ") || "see perClause"}`,
-        why: `"${driver.text}" has no authorable family and no config or manual path — say so for that part only` };
+        why: `"${driver.text}" has no authoring family and no config or manual path — say so for that part only` };
     }
   }
 
@@ -413,7 +315,7 @@ export function decide(clauses = [], registry = []) {
     : null;
 
   return { verdict, closest, partial, perClause,
-    evidenceAbsent: perClause.filter((c) => c.signal === "evidence-absent").map((c) => c.text) };
+    evidenceAbsent: perClause.filter((c) => c.signal === "no-authoring-family").map((c) => c.text) };
 }
 
 // ---- registry validation: drift fails the build ----

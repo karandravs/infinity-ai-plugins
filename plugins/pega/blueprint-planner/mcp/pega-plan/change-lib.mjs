@@ -22,12 +22,12 @@ import path from "node:path";
 
 import {
   planPegaBuild, loadSchema, extractCreateRule, pickBestExample, fillForSkill, applySchema,
-  validateSchema, blanksFor, corpusVocabulary, goalCapability, goalCapabilityHead, CORPUS,
-  resolveUnnamedSor, routeClauses, ROUTE,
+  validateSchema, blanksFor, resolveUnnamedSor, routingFrom, CORPUS,
 } from "./plan-lib.mjs";
 import { applyPlatformTruths } from "./preflight-lib.mjs";
-import { resolvePrereqs, structuralClosure } from "./prereq-lib.mjs";
-import { decide, loadRegistry, describeClosest, routedAboveFloor, NEAR_CUTOFF } from "./verdict-lib.mjs";
+import { resolvePrereqs } from "./prereq-lib.mjs";
+import { decide, loadRegistry, describeClosest } from "./verdict-lib.mjs";
+import { classifyClauses, taxonomySummary } from "./taxonomy-lib.mjs";
 import { splitClauses, normaliseQuestion } from "./question-lib.mjs";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { JEV_MODEL, JevError, JevUnavailable } from "../../lib/jev-lib.mjs";
@@ -79,40 +79,16 @@ export function goalForClause(clause, verb = NEUTRAL_VERB) {
   return normaliseQuestion(prefixed) || prefixed;
 }
 
-// ---- 1. which capability does a clause NAME? (deterministic; no model call) ----
-// decide() needs a capability: it is what the registry is looked up with, and what a `no` is NAMED
-// after. Two rules, in order (controller ruling for this task):
-//   * a registry alias in the clause → the registry's capability key (decide offers its manual path);
-//   * otherwise the clause names a CONCRETE OBJECT when a determiner introduces the head noun
-//     ("an email account") or the head noun is in the corpus's declared vocabulary ("an SLA").
-// A clause that names no object at all ("make the case fly") passes null → decide says `unsure`.
-const DETERMINER_RE = /\b(?:a|an|the|this|that|these|those)\s+([a-z0-9][a-z0-9-]*(?:[\s-]+[a-z0-9][a-z0-9-]*){0,2})\s*$/i;
-
-// Words that END a clause as a bare predicate rather than as the head of the object it names. The
-// planner has no part-of-speech tagger, so this closed list is the one lexical fact it uses, and it
-// is used in ONE direction only: a phrase whose last word is here is NOT treated as a concrete
-// object, so its clause can only reach `unsure` — never `no`. A missing verb therefore costs
-// accuracy (a `no` where `unsure` was warranted); it can never turn a real object into a rejection.
-const PREDICATE_WORD = new Set([
-  "fly", "run", "work", "fail", "succeed", "exist", "happen", "appear", "seem", "look", "sound",
-  "feel", "become", "remain", "stay", "live", "die", "grow", "help", "show", "tell", "say", "speak",
-  "ask", "answer", "begin", "start", "stop", "end", "finish", "open", "close", "break", "fix",
-  "hold", "keep", "give", "take", "put", "send", "move", "walk", "talk", "think", "know", "want",
-  "need", "try", "play", "win", "lose", "fight", "sing", "dance", "eat", "sleep", "drink", "cry",
-  "laugh", "shine", "burn", "breathe", "rise", "fall", "sit", "stand", "lie", "wear", "drive",
-  "ride", "swim", "jump", "climb", "cook", "clean", "wash", "buy", "sell", "pay", "cost", "matter",
-  "apply", "belong", "depend", "refer", "match", "fit", "suit", "count", "affect", "cause", "change",
-  "turn", "return", "repeat", "continue", "proceed", "follow", "lead", "form", "behave", "respond",
-]);
-
+// ---- 1. the registry path a SECURITY clause resolves to (deterministic; no model call) ----
+// The verdict no longer extracts a "capability" from the clause: the taxonomy says WHETHER the clause
+// is about the `security` concept, and `capabilities.json` says what to do instead. The one lexical
+// question left is which registered security surface the clause names ("sso" vs "access"), and the
+// clause's own words answer it. The longest matching alias wins, so "case access" is not shadowed by
+// a generic "access"; a security clause that names neither falls back to the concept's default
+// surface (access groups / roles).
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const wordIn = (word, text) => new RegExp(`(?<![a-z0-9])${escapeRe(word)}(?![a-z0-9])`, "i").test(text);
 
-// the vocabulary corpusVocabulary() returns is { text, acronyms }; accept the bare text too
-const vocabularyText = (vocabulary) => (typeof vocabulary === "string" ? vocabulary : String(vocabulary?.text || ""));
-const vocabularyAcronyms = (vocabulary) => (vocabulary && typeof vocabulary === "object" && vocabulary.acronyms instanceof Set ? vocabulary.acronyms : new Set());
-
-// The LONGEST matching alias wins, so a specific "case access" is not shadowed by a generic "access".
 function registryAlias(text, registry) {
   const t = String(text ?? "").toLowerCase();
   if (!t) return null;
@@ -127,43 +103,14 @@ function registryAlias(text, registry) {
   return best?.entry || null;
 }
 
-// → the capability key a clause names, or null when it names none.
-export function clauseCapability(clause, { registry = [], vocabulary = "" } = {}) {
-  const entry = registryAlias(clause, registry);
-  if (entry) return String(entry.capability || "").trim().toLowerCase() || null;
-  const phrase = goalCapability(clause); // "an email account" · "the case fly"
-  const determiner = phrase.match(DETERMINER_RE);
-  if (determiner) {
-    const object = determiner[1].trim();
-    const head = object.split(/\s+/).pop();
-    if (head && !PREDICATE_WORD.has(head.toLowerCase())) return object.toLowerCase();
-  }
-  const head = goalCapabilityHead(clause);
-  if (head && (wordIn(head, vocabularyText(vocabulary)) || vocabularyAcronyms(vocabulary).has(head))) return head;
-  return null;
+// → the registry capability a security clause resolves to ("access" when it names no other surface).
+export function securityCapability(clause, registry) {
+  const named = registryAlias(clause, registry);
+  if (named) return String(named.capability || "").trim().toLowerCase() || null;
+  return "access";
 }
 
-// ---- 2. per-family composability — the second piece of evidence decide() reads ----
-// hasSchema from the corpus schema, hasExample from the family's examples/*.md. Memoised: one
-// readdir per family per process, not per clause.
-const _familyEvidence = new Map();
-const bareFamily = (f) => String(f ?? "").trim().replace(/^rules-rule-/, "");
-const skillFamily = (f) => {
-  const s = String(f ?? "").trim();
-  return s.startsWith("methodology") ? s : `rules-rule-${bareFamily(s)}`;
-};
-async function familyEvidence(family) {
-  const bare = bareFamily(family);
-  if (_familyEvidence.has(bare)) return _familyEvidence.get(bare);
-  const skill = skillFamily(bare);
-  const schema = await loadSchema(skill);
-  const files = await readdir(path.join(CORPUS, "skills", skill, "examples")).catch(() => []);
-  const value = { hasSchema: schema.hasSchema === true, hasExample: files.some((f) => f.endsWith(".md")) };
-  _familyEvidence.set(bare, value);
-  return value;
-}
-
-// ---- 3. the honesty channel: every `blanks` kind becomes a readable `unresolved` entry ----
+// ---- 2. the honesty channel: every `blanks` kind becomes a readable `unresolved` entry ----
 const UNRESOLVED_WHY = {
   reference: "must name an existing rule",
   value: "example text not grounded in the question",
@@ -193,7 +140,15 @@ export function unresolvedFor(plan) {
   });
 }
 
-// ---- 4. a step's title, derived from the rule's own Pega class (cosmetic only) ----
+// family names arrive bare ("obj-casetype") from the taxonomy and prefixed ("rules-rule-obj-casetype")
+// from the corpus: one normaliser, so the two can be compared.
+const bareFamily = (f) => String(f ?? "").trim().replace(/^rules-rule-/, "");
+const skillFamily = (f) => {
+  const s = String(f ?? "").trim();
+  return s.startsWith("methodology") ? s : `rules-rule-${bareFamily(s)}`;
+};
+
+// ---- 3. a step's title, derived from the rule's own Pega class (cosmetic only) ----
 // "Rule-Obj-CaseType" → "case type"; "Rule-Connect-REST" → "REST connector". Nothing decides on a
 // title; the rule/`source` fields carry the truth.
 const CONNECT_NOUN = "connector";
@@ -212,7 +167,7 @@ function titleFor(pxObjClass, family) {
   return `Create the ${labelFor(pxObjClass, family)}`;
 }
 
-// ---- 5. compose a PREREQUISITE family with the same engine (no routing, no scoring) ----
+// ---- 4. compose a PREREQUISITE family with the same engine (no routing, no scoring) ----
 // A prerequisite is a structural dependency, not routed evidence. It is composed with exactly the
 // stages a routed plan goes through — fillForSkill → schema auto-fill → platform-truth pre-flight →
 // AJV gate — and only shipped when it comes out CLEAN. A prerequisite that cannot be composed is a
@@ -276,9 +231,15 @@ function provenanceForComposed(payload, schema, { namespace } = {}) {
   return provenance;
 }
 
-// ---- 6. steps ----
-function ruleStep(plan, routed) {
+// ---- 5. steps ----
+// A step's `rule` carries the CLASSIFICATION it was chosen by: the family's probability and the
+// top/second separation of the distribution it won. (The old `margin_to_cutoff` is gone — a taxonomy
+// Choice has no cutoff to sit on; `separation` is the ambiguity metric the verdict reads.)
+function ruleStep(plan, classification) {
   const family = bareFamily(plan.skill);
+  const confidence = classification
+    ? Number(classification.familyConfidence ?? classification.familyProbs?.[family] ?? 0)
+    : null;
   return {
     n: null, // numbered by the caller
     kind: "rule",
@@ -288,8 +249,9 @@ function ruleStep(plan, routed) {
       family,
       skill: plan.skill,
       example: plan.sourceExample || null,
-      confidence: routed ? routed.score : null,
-      margin_to_cutoff: routed ? routed.margin : null,
+      concept: classification?.concept || null,
+      confidence,
+      separation: classification ? Number(classification.separation) : null,
     },
     payload: plan.payload,
     provenance: plan.provenance || {},
@@ -308,7 +270,7 @@ function prereqStep(family, composed) {
     title: titleFor(composed.payload?.pxObjClass, family),
     rule: {
       ruleType: bareFamily(family), family: bareFamily(family), skill,
-      example: composed.example, confidence: null, margin_to_cutoff: null,
+      example: composed.example, concept: null, confidence: null, separation: null,
     },
     payload: composed.payload,
     provenance: composed.provenance || {},
@@ -339,7 +301,7 @@ function manualStep(clause, entry) {
   };
 }
 
-// ---- 7. the answer: a deterministic template (no model prose) ----
+// ---- 6. the answer: a deterministic template (no model prose) ----
 const VERDICT_HEAD = {
   yes: "Yes.",
   alternative: "Not exactly as asked.",
@@ -362,14 +324,13 @@ function composeAnswer({ verdict, perClause, steps, closest, inputs }) {
   return `${VERDICT_HEAD[verdict] || "Not sure yet."}${opinion}${clauseText}${stepsText}${inputText}`;
 }
 
-// ---- 8. provenance ----
+// ---- 7. provenance ----
 // corpus_version from the discovered corpus; model from the pinned Jev client; the registry
 // (capabilities.json) carries no version field of its own, so its version IS the corpus version.
-// `routing_samples` is the number of independent judgment readings behind each routing score: 3 on
-// the legacy per-goal path (routeSkills averages that many calls), 1 on the shipped path (routeClauses
-// batches every clause × family into ONE call — R15).
-// `timing_ms` is the MEASURED cost (R16): routing = the one judgment call, compose = everything
-// else (examples, payload composition, gates), total = end to end.
+// `routing_samples` is the number of independent judgment readings behind the classification: ONE
+// — the taxonomy asks every clause's concept, family and `any` questions in a single request.
+// `timing_ms` is the MEASURED cost: routing = that one judgment call, compose = everything else
+// (examples, payload composition, gates), total = end to end.
 function provenanceOf({ routing_samples = 1, timing_ms = null } = {}) {
   const { version } = corpusPaths();
   return {
@@ -388,105 +349,70 @@ function outageAnswer(e, timing_ms = null) {
   const why = `judgment service unavailable: ${String(e?.message || e).slice(0, 300)}`;
   return {
     verdict: "unsure",
-    answer: `Not sure yet. Routing could not be scored, so there is no evidence either way. Re-run the question once the judgment service is reachable.`,
-    closest: { what: "a working judgment service (retry the question)", why: "routing could not be scored, so this question has no evidence either way" },
+    answer: `Not sure yet. The clauses could not be classified, so there is no evidence either way. Re-run the question once the judgment service is reachable.`,
+    closest: { what: "a working judgment service (retry the question)", why: "classification could not be scored, so this question has no evidence either way" },
     partial: null,
     clauses: [],
     steps: [],
     inputs_required: [],
     caveats: [why],
-    looked_at: { families: [], cutoff: null, evidence_absent: [] },
+    looked_at: { clauses: [], taxonomy: taxonomySummary(), evidence_absent: [] },
     provenance: provenanceOf({ timing_ms }),
   };
 }
 
-// The near-cutoff band the assembly uses to decide what counts as evidence is verdict-lib's own
-// NEAR_CUTOFF (imported above): a family within that band below the cutoff is a near-threshold
-// signal, and the spec's `no` row excludes exactly that case.
-
-// ---- 9. the answer ----
-export async function planPegaChange({ question, contracts_dir, namespace, planFn = planPegaBuild, jevFn } = {}) {
+// ---- 8. the answer ----
+// ONE judgment call classifies every clause (taxonomy-lib); everything after it is deterministic:
+// planPegaBuild composes the family each clause was classified into (it makes no routing call of its
+// own when handed the classification), the structural prerequisite walk (prereq-lib) emits the steps
+// in BUILD order, and verdict-lib turns the classification into the verdict.
+export async function planPegaChange({ question, contracts_dir, namespace, planFn = planPegaBuild, jevFn, classifyFn = classifyClauses } = {}) {
   assertQuestion(question);
   const started = Date.now();
 
   const registry = loadRegistry();
-  const vocabulary = await corpusVocabulary();
   const clauseTexts = splitClauses(question);
   const verb = questionVerb(question);
-  // every clause is planned as a GOAL: a fragment inherits the question's verb (see goalForClause)
+  // Every clause is COMPOSED as a goal (a fragment inherits the question's verb, so the composer gets
+  // a goal statement), while the CLASSIFIER is given the clause as the user wrote it: the taxonomy
+  // reads what the clause asks for, not the imperative wrapper put around it.
   const goals = clauseTexts.map((clause) => goalForClause(clause, verb) || clause);
 
-  // A) ONE routing call for the WHOLE question (R15): routeClauses batches every clause × family
-  // into a single judgment call. An INJECTED planFn owns its own routing (the offline test seam),
-  // so the batch is taken only on the shipped path (planFn === the real planPegaBuild).
+  // A) ONE classification call for the WHOLE question. The clauses together are the state, so a bare
+  // "an SLA" is judged knowing the dispute case beside it.
   const planned = [];
   let routingMs = 0;
   try {
-    let routingByGoal = null;
-    if (planFn === planPegaBuild) {
-      const tRouting = Date.now();
-      // the WHOLE normalised question is the batched call's context (R17): one reading per family,
-      // judged against every clause together.
-      routingByGoal = await routeClauses(goals, { question: normaliseQuestion(question), ...(jevFn ? { jevFn } : {}) });
-      routingMs = Date.now() - tRouting;
-    }
+    const tClassification = Date.now();
+    const classifications = await classifyFn(clauseTexts, { question: normaliseQuestion(question), ...(jevFn ? { jevFn } : {}) });
+    routingMs = Date.now() - tClassification;
     for (let i = 0; i < clauseTexts.length; i++) {
       const clause = clauseTexts[i];
       const goal = goals[i];
-      const route = routingByGoal ? routingByGoal.get(goal) : null;
-      const plan = await planFn({ query: goal, contracts_dir, namespace, ...(route ? { routing: route } : {}), ...(jevFn ? { jevFn } : {}) });
-      const capability = clauseCapability(clause, { registry, vocabulary });
-      const seen = Array.isArray(plan?.routing?.routed) ? plan.routing.routed : [];
-      const measured = [];
-      for (const r of seen) measured.push({ family: bareFamily(r.family), score: r.score, margin: r.margin, cleared: r.cleared !== false, ...(await familyEvidence(r.family)) });
-      // WHICH SCORES ARE EVIDENCE (documented, deterministic):
-      //   * methodology-* are meta-docs, never candidate plans (they carry no schema/example BY
-      //     DESIGN) — using them as evidence of non-authorability would turn every tie with a guide
-      //     into `unsure`, so they are reported in `looked_at` and never scored as a candidate;
-      //   * R18: a family BELOW the routing floor is not a candidate at all. It is noise the
-      //     recall-oriented shortlist kept for context, and jitter around a sub-floor score must not
-      //     manufacture `unsure` — that is what makes an honest `no` reachable ("email account");
-      //   * a family at/above the floor is evidence; so is one within NEAR_CUTOFF below the CUTOFF
-      //     (the spec's `no` row requires "no near-threshold signal") — the latter arrives with a
-      //     negative margin, so decide() reads it as near-cutoff, not as a hit;
-      //   * and (see below) a clause that names NO capability carries no routing evidence at all.
-      const floor = Number.isFinite(plan?.routing?.floor) ? plan.routing.floor : ROUTE.floor;
-      const evidence = capability
-        ? routedAboveFloor(measured.filter((r) => !r.family.startsWith("methodology") && Number(r.margin) >= -NEAR_CUTOFF), floor)
-        : [];
-      // A STRUCTURAL PREREQUISITE (or DEPENDENT) OF THE WINNER IS A COMPLEMENT, NOT A COMPETITOR.
-      // decide() reads a near-cutoff score as "two candidate answers disagree", which is right for two
-      // unrelated families and wrong for a family the answer already contains: `obj-class` is a case
-      // type's own prerequisite and the planner emits it as an earlier step, so its negative margin is
-      // not a disagreement about WHAT to build. Such a family is therefore excluded from the ambiguity
-      // comparison (the `role` below says why it is still on the record), while everything decide()
-      // needs to stay generic — the precedence table, the band, the tie rule — is left untouched.
-      const top = [...evidence].sort((a, b) => Number(b.score) - Number(a.score))[0] || null;
-      const closure = top ? structuralClosure(top.family) : new Set();
-      const needsOfTop = new Set(top ? resolvePrereqs([top.family]).steps.map(bareFamily) : []);
-      const roleOf = (family) => {
-        if (!top || family === top.family || !closure.has(family)) return "candidate";
-        return needsOfTop.has(family) ? "prerequisite" : "dependent";
-      };
-      const compared = evidence.filter((r) => roleOf(r.family) === "candidate");
-      planned.push({
-        clause, goal, plan, capability, seen: measured, routed: evidence, compared, floor, roleOf,
-        cutoff: Number.isFinite(plan?.routing?.cutoff) ? plan.routing.cutoff : null,
+      const classification = classifications[i] || null;
+      const plan = await planFn({
+        query: goal, contracts_dir, namespace,
+        routing: routingFrom(classification), ...(jevFn ? { jevFn } : {}),
       });
+      // the registry is consulted ONLY for a clause the taxonomy put in the security concept
+      const capability = classification?.concept === "security" ? securityCapability(clause, registry) : null;
+      planned.push({ clause, goal, plan, classification, capability, stepNumbers: [] });
     }
   } catch (e) {
     if (isJevError(e)) return outageAnswer(e, { routing: routingMs, compose: Date.now() - started - routingMs, total: Date.now() - started });
     throw e;
   }
 
-  // B) the verdict, from the evidence decide() documents (per clause, worst clause wins). `compared`
-  // is the clause's evidence MINUS the winner's structural complements (see the roleOf note above):
-  // a prerequisite/dependent cannot compete with the family it is a part of.
+  // B) the verdict, from the classification alone (verdict-lib documents the precedence).
   const decision = decide(
-    planned.map((p) => ({ text: p.clause, capability: p.capability, routed: p.compared, cutoff: p.cutoff, floor: p.floor })),
+    planned.map((p) => ({ text: p.clause, capability: p.capability, classification: p.classification })),
     registry
   );
-  planned.forEach((p, i) => { p.verdict = decision.perClause[i]?.verdict || "unsure"; p.signal = decision.perClause[i]?.signal || null; p.closest = decision.perClause[i]?.closest || null; p.stepNumbers = []; });
+  planned.forEach((p, i) => {
+    p.verdict = decision.perClause[i]?.verdict || "unsure";
+    p.signal = decision.perClause[i]?.signal || null;
+    p.closest = decision.perClause[i]?.closest || null;
+  });
 
   // C) steps, in BUILD order. A step's structural prerequisites are emitted BEFORE it — even when
   // the clause that authors one appears later in the question — then numbering is assigned, so
@@ -497,29 +423,27 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
   for (const p of planned) for (const c of p.plan?.caveats || []) if (!caveats.includes(c)) caveats.push(c);
 
   const authored = (p) => (p.plan?.plans || []).filter((pl) => pl && pl.payload && String(pl.skill || "").startsWith("rules-rule-"));
-  // A STEP SHIPS ONLY WHEN ITS FAMILY IS EVIDENCE FOR THE CLAUSE. planPegaBuild is RECALL-oriented:
-  // it composes a plan for whatever the router shortlisted, even when nothing cleared the cutoff —
-  // so a clause about case access arrives with a case-type plan. Handing that over as a step would
-  // contradict the clause's own verdict (spec §alternative: "part of it is authorable"; a registry
-  // hit with `authorable: []` has no authorable part), so steps are filtered to the families the
-  // verdict rests on. A `yes` clause always has at least one (the verdict requires it), and the
-  // prerequisite steps those families pull in are kept.
-  const evidenceOf = (p) => new Set(p.routed.map((r) => r.family));
-  const steppable = (p) => authored(p).filter((pl) => evidenceOf(p).has(bareFamily(pl.skill)));
+  const chosenFamily = (p) => (p.classification?.family ? bareFamily(p.classification.family) : null);
+  // A STEP SHIPS ONLY WHEN ITS FAMILY IS THE ONE THE CLAUSE WAS CLASSIFIED INTO. planPegaBuild is
+  // handed that family as its routing, so this is normally the only plan it composes — the filter is
+  // the guard that keeps a composed payload from becoming a step the verdict never rested on.
+  const steppable = (p) => authored(p).filter((pl) => bareFamily(pl.skill) === chosenFamily(p));
 
   // one draft per (clause, plan) in the order the question asked for; a registry alternative
   // contributes the manual/config step it stands for.
   const drafts = [];
   for (const p of planned) {
-    // ONLY an answered clause ships steps (R18/Important 2): `no` is a rejection, and `unsure` is a
-    // question — neither is a plan. Their candidates live in `closest`, so nothing unbuildable is
-    // ever handed over as "build these".
+    // ONLY an answered clause ships steps: `no` is a rejection, and `unsure` is a question — neither
+    // is a plan. Their candidates live in `closest`, so nothing unbuildable is handed over.
     if (p.verdict !== "yes" && p.verdict !== "alternative") continue;
-    p.routedByFamily = new Map(p.routed.map((r) => [r.family, r]));
     if (p.signal === "registry") {
       const entry = registry.find((e) => String(e.capability).toLowerCase() === String(p.capability || "").toLowerCase())
         || registry.find((e) => (e.aliases || []).some((a) => String(a).toLowerCase() === String(p.capability || "").toLowerCase()));
       if (entry) drafts.push({ kind: "manual", entry, clause: p.clause, clausePlan: p });
+      // A REGISTRY ALTERNATIVE HAS NO AUTHORABLE PART. The classified family is meaningless for this
+      // clause (the corpus authors no access/SSO rule, which is why it is an `alternative`), so a
+      // composed payload for it would be a step the verdict never rested on. Only the manual step ships.
+      continue;
     }
     for (const pl of steppable(p)) drafts.push({ kind: "rule", family: bareFamily(pl.skill), plan: pl, clause: p.clause, clausePlan: p });
   }
@@ -536,7 +460,7 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     // A prerequisite's OWN prerequisites are prerequisites too. resolvePrereqs is deliberately ONE
     // level (prereq-lib) so an answer stays auditable, which puts the walk here: without it a
     // `ui-view` question ships a case type with no class and still answers `yes` — a `yes` with an
-    // unlisted prerequisite, which the spec forbids. `visiting` guards a cycle.
+    // unlisted prerequisite. `visiting` guards a cycle.
     if (visiting.has(family)) return null;
     visiting.add(family);
     for (const sub of resolvePrereqs([family]).steps) {
@@ -550,7 +474,7 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     emitted.set(family, step);
     addInputs(family);
     caveats.push(composed.payload
-      ? `prerequisite ${family} composed from the corpus (step ${step.n}) — it is a structural dependency, not routed evidence, so it carries no routing score`
+      ? `prerequisite ${family} composed from the corpus (step ${step.n}) — it is a structural dependency, not routed evidence, so it carries no classification score`
       : `prerequisite ${family}: no composed payload — ${composed.why} (step ${step.n} is listed so the dependency is visible)`);
     return step;
   };
@@ -576,7 +500,7 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     }
     addInputs(draft.family);
     visiting.delete(draft.family);
-    const step = emitted.get(draft.family) || push(ruleStep(draft.plan, plan.routedByFamily.get(draft.family)));
+    const step = emitted.get(draft.family) || push(ruleStep(draft.plan, plan.classification));
     emitted.set(draft.family, step);
     if (!plan.stepNumbers.includes(step.n)) plan.stepNumbers.push(step.n);
   };
@@ -622,27 +546,33 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     if (live.length) caveats.push(`step ${step.n} (${step.rule?.ruleType || step.kind}): ${live.length} platform-truth issue(s) can only be resolved against the live application — see checks.platformTruthIssues`);
     if (step.unresolved?.length) caveats.push(`step ${step.n} (${step.rule?.ruleType || step.kind}): ${step.unresolved.length} unresolved element(s) are drafts, not grounded content — see unresolved`);
   }
+  // A `yes` whose family could not be composed (the corpus has a schema but no example) must not
+  // read as "build this" with nothing to build.
+  for (const p of planned) {
+    if (p.verdict !== "yes" || p.stepNumbers.length) continue;
+    caveats.push(`clause "${p.clause}" was classified into ${chosenFamily(p) || "no family"} but no payload could be composed for it — the corpus has no example to compose from, so there is no step`);
+  }
 
-  // F) the trail: what was looked at, with the scores the verdict rests on.
-  const cutoffs = planned.map((p) => p.cutoff).filter((n) => Number.isFinite(n));
-  const clauses = planned.map((p) => ({ text: p.clause, goal: p.goal, verdict: p.verdict, signal: p.signal, capability: p.capability, steps: p.stepNumbers, closest: p.closest }));
+  // F) the trail: the classification the verdict rests on, per clause.
+  const clauses = planned.map((p) => ({
+    text: p.clause, goal: p.goal, verdict: p.verdict, signal: p.signal,
+    concept: p.classification?.concept || null,
+    family: p.classification?.family || null,
+    steps: p.stepNumbers, closest: p.closest,
+  }));
   const lookedAt = {
-    families: planned.flatMap((p) => p.seen.map((r) => ({
+    clauses: planned.map((p) => ({
       clause: p.clause,
-      family: r.family,
-      score: r.score,
-      margin: r.margin,
-      hasSchema: r.hasSchema,
-      hasExample: r.hasExample,
-      // false → methodology meta-doc or a candidate below the near-cutoff band: reported, not used
-      authoring: !r.family.startsWith("methodology"),
-      used: p.routed.some((x) => x.family === r.family),
-      // "candidate" → competed for the verdict. "prerequisite"/"dependent" → a structural complement
-      // of the winner (a part of the answer, already a step), so it was reported but never weighed
-      // as a competing candidate. `role` is presentation of a decision already made in B.
-      role: p.roleOf(r.family),
-    }))),
-    cutoff: cutoffs.length ? Math.max(...cutoffs) : null,
+      goal: p.goal,
+      concept: p.classification?.concept || null,
+      conceptConfidence: p.classification?.conceptConfidence ?? null,
+      conceptProbs: p.classification?.conceptProbs || {},
+      family: p.classification?.family || null,
+      familyProbs: p.classification?.familyProbs || {},
+      separation: p.classification?.separation ?? null,
+      any: p.classification?.any ?? null,
+    })),
+    taxonomy: taxonomySummary(),
     evidence_absent: decision.evidenceAbsent,
   };
 

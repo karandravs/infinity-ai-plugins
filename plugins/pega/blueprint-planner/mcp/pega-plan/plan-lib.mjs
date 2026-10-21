@@ -5,8 +5,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import { systemOne, JevUnavailable } from "../../lib/jev-lib.mjs";
-import { requireOrder, familyProfile, expandFamilies, loadGraph } from "./graph-lib.mjs";
+import { requireOrder, familyProfile, expandFamilies } from "./graph-lib.mjs";
+import { classifyClauses } from "./taxonomy-lib.mjs";
+import { jev } from "./jev-client.mjs";
 import { composeContainer } from "./compose-lib.mjs";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { validatePayload, platformSuppliedKeys } from "./validate-lib.mjs";
@@ -19,13 +20,11 @@ export const CORPUS = corpusPaths().corpus; // discovered + validated at startup
 // the frozen-plan store live in harness/fill-lib.mjs (engineering loop only).
 
 // ---- tunables (named, not inline magic) ----
-const AUTHORING_PREFIXES = ["methodology", "rules-rule"]; // which corpus families are rules to author
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
-// routing tunables — `samples` is the number of independent judgment readings behind each routing
-// score: 3 on the legacy per-goal path (routeSkills averages that many calls), 1 on the shipped path
-// (routeClauses batches every clause × family into ONE call). The answer's
-// `provenance.routing_samples` states which, and the verdict layer reports it, never re-routes.
-export const ROUTE = { floor: 0.45, margin: 0.11, cap: 8, tie: 0.05, samples: 3, band: 0.04 }; // recall-oriented shortlist (see routeSkills)
+// ROUTING IS A TAXONOMY CHOICE, NOT A THRESHOLD. `routeGoal` asks the two-level taxonomy
+// (taxonomy-lib.mjs) ONE Choice question per level and composes only the family the model chose.
+// There is no floor, cutoff, margin or band here any more: the model returns a distribution and its
+// own confidence, and the verdict layer (verdict-lib.mjs) reads those.
 const PICK = { requiredWeight: 5, methodWeight: 1.5, variantPenalty: 0.3, variantRe: /auth|dynamic|grouped/i };
 const CORPUS_CHOICE = { min: 2, max: 12, maxLen: 32, maxWords: 4 }; // a small observed vocabulary is a usable menu
 
@@ -45,36 +44,9 @@ const PY_ADMIN = new Set([
   "pyPOSTDataMappingType",
 ]);
 
-// credentials come from the PROCESS ENVIRONMENT only — never a dotenv/secrets file (a shipped tool
-// that reads repo secrets is a leak with a friendly name). Wire the key in the server's environment.
-const { env: ENV } = process; // aliased: this module must contain no dotenv literal at all (surface test)
-const key = () => ENV.TYPESAFE_API_KEY || null;
-
-async function jev({ state, questions }) {
-  const apiKey = key();
-  if (!apiKey) throw new JevUnavailable("TYPESAFE_API_KEY not set");
-  _jevCalls += 1;
-  return systemOne({ apiKey, state, questions });
-}
-
-// TEST-ONLY instrumentation: how many judgment calls THIS process has made. The shipped tool never
-// reads it (no production telemetry); the suite uses it to prove the one-call budget (R15/R16).
-let _jevCalls = 0;
-export const jevCallCount = () => _jevCalls;
-export const resetJevCallCount = () => { _jevCalls = 0; };
-
-// ---- 1. TOC (cheap, feedable state) ----
-export async function loadToc({ prefixes = AUTHORING_PREFIXES } = {}) {
-  const m = JSON.parse(await readFile(path.join(CORPUS, "manifest.json"), "utf8"));
-  // one entry per authoring family (dedupe by the family name) so the Jev route criteria stays small
-  const families = new Map();
-  for (const s of m.skills) {
-    if (!prefixes.some(p => s.name.startsWith(p))) continue;
-    const fam = s.name.split("/")[0];
-    if (!families.has(fam)) families.set(fam, s);
-  }
-  return [...families.values()].map(s => ({ name: s.name.split("/")[0], desc: (s.description || "").slice(0, 120) }));
-}
+// The judgment client lives in jev-client.mjs so the classifier and the composer share ONE call
+// counter — the suite proves the one-call budget across modules, not per module.
+export { jevCallCount, resetJevCallCount } from "./jev-client.mjs";
 
 // ---- 2. extract `create-rule` JSON blocks from an example .md ----
 export async function extractCreateRule(skillName) {
@@ -650,29 +622,6 @@ export async function selectExample(goal, examples, { schema = {}, neededMethods
   return pickBestExample(pool, { neededMethods, requiredManual: schema.requiredManual });
 }
 
-// ---- candidate authoring families — DERIVED FROM THE INDEX (all rules-rule-* + methodology-*) ----
-// No hand-curated subset: every family in the corpus is routable. The manifest description of
-// each family is the plain-language routing text.
-let _candCache = null;
-export async function deriveCandidates() {
-  if (_candCache) return _candCache;
-  const m = JSON.parse(await readFile(path.join(CORPUS, "manifest.json"), "utf8"));
-  const fams = new Map();
-  for (const s of m.skills) {
-    if (!AUTHORING_PREFIXES.some(p => s.name.startsWith(p))) continue;
-    const fam = s.name.split("/")[0];
-    if (!fams.has(fam)) fams.set(fam, s.description || "");
-  }
-  _candCache = [...fams.entries()].map(([f, desc]) => {
-    // trim the boilerplate so the routing question reads plainly, then add the graph's keywords
-    // (the corpus skills-graph tags each family) as extra routing signal.
-    const clean = desc.replace(/^(Authoring guide for|Use when)\s*/i, "").replace(/\s*--.*$/, "").trim();
-    const kw = (familyProfile(f).keywords || []).filter(k => k.length > 3).slice(0, 8).join(", ");
-    return { f, desc: `${clean.slice(0, 110)}${kw ? ` [${kw}]` : ""}` };
-  });
-  return _candCache;
-}
-
 // ---- goal coverage: does ANY authoring family DECLARE the goal's capability? ----
 // Routing is recall-oriented (it ALWAYS returns a shortlist) and the schema gate only checks
 // structure — so a goal the corpus has no family for (a platform/security capability) still produces
@@ -764,127 +713,39 @@ export function coverageFor(goal, vocab) {
     : { covered: false, capability: head, phrase, reason: `no authoring rule family in the corpus declares the capability "${head}" — routing substitutes a structurally-valid rule that does not do the job` };
 }
 
-// families the skills-graph explicitly relates to `root` (SIMILAR or REQUIRES, either direction).
-// Used to resolve boundary coin-flips deterministically (see routeSkills' `band`).
-function relatedTo(root) {
-  const { similarOf, requiresOf } = loadGraph();
-  const out = new Set([...(similarOf.get(root) || []), ...(requiresOf.get(root) || [])]);
-  for (const [f, set] of similarOf) if (set.has(root)) out.add(f);
-  for (const [f, set] of requiresOf) if (set.has(root)) out.add(f);
-  return out;
+// ---- routing: ONE taxonomy classification, then compose the family it chose ----
+// The old router asked 37 yes/no questions per clause and thresholded the scores (floor/cutoff/band/
+// tie). The taxonomy (taxonomy-lib.mjs) asks ONE Choice per level instead and returns a distribution,
+// so routing here is a READ, not a ranking: the chosen family is the plan, and the structural
+// prerequisites of that family are the extra steps (prereq-lib decides the order, never the choice).
+//
+// `routingFrom` turns a classification into the routing shape planPegaBuild composes from, so the
+// shipped path (which classifies every clause in ONE call) and the standalone path (which classifies
+// its own goal) go through exactly the same composer.
+export function routingFrom(classification) {
+  const family = String(classification?.family || "").trim();
+  if (!family) return { flagged: [], primary: null, unique: [], routed: [], cutoff: null, floor: null, candidateCount: 0 };
+  const score = Number(classification?.familyProbs?.[family] ?? classification?.familyConfidence ?? 0);
+  return {
+    flagged: [{ f: `rules-rule-${family}`, p: score }],
+    primary: `rules-rule-${family}`,
+    unique: [`rules-rule-${family}`],
+    // the evidence shape the answer reports. `margin`/`cutoff` are null BY DESIGN: there is no cutoff
+    // in a taxonomy Choice — the ambiguity metric is `separation`, reported by the verdict layer.
+    routed: [{ family, score: Number(score.toFixed(3)), margin: null, cleared: true }],
+    cutoff: null,
+    floor: null,
+    candidateCount: 0,
+    classification,
+  };
 }
 
-// ---- routing: one noul per family (plain desc) over the WHOLE corpus ----
-// Recall-oriented shortlist. Jev's absolute confidence for "this goal requires family X" is
-// compressed (0.5-0.8), so an absolute cut drops the right family. Two things matter:
-//   1. The cutoff is ANCHORED ON THE BEST AUTHORABLE FAMILY (rules-rule-*), not on the overall
-//      top. methodology-* are meta-docs (no create-rule payload); letting a 0.97 methodology
-//      score set the cutoff starves the plan set (e.g. "data model" goals) and makes the set
-//      flip when a rule family wobbles across the inflated cutoff.
-//   2. The margin is small (`tie`-scale): the junk second candidates sit far below the best
-//      rule, while genuinely-required second rules sit close to it; a wide margin keeps
-//      adding near-boundary families, which is exactly what makes repeated calls disagree.
-// Precision is still enforced downstream by the schema gate + per-payload Jev score.
-export async function routeSkills(query, { floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap, tie = ROUTE.tie, samples = ROUTE.samples, band = ROUTE.band, jevFn = jev } = {}) {
-  const cands = await deriveCandidates();
-  const questions = {};
-  cands.forEach((c, i) => {
-    questions[`fam${i}`] = { type: "noul", instructions: `The build goal (in the state) requires authoring/working on: ${c.desc}. Consider EVERY clause of the goal; answer true if ANY part requires it.` };
-  });
-  // Jev's noul wobbles ~±0.02 per call; a single sample makes the cutoff a coin-flip for any
-  // family sitting on it. Average `samples` independent calls to shrink that variance (the
-  // expected score is unchanged, so recall is not traded away) before applying the cutoff.
-  const runs = await Promise.all(Array.from({ length: Math.max(1, samples) }, () => jevFn({ state: `Build goal: "${query}"`, questions })));
-  const scoreOf = (i) => runs.reduce((sum, r) => sum + (r.answers?.[`fam${i}`]?.noul ?? 0), 0) / runs.length;
-  return rankFamilies(cands, scoreOf, { floor, margin, cap, tie, band });
-}
-
-// ONE judgment call for the WHOLE question (R15/R17): every clause × family is batched as
-// `cl<i>_fam<j>`, with `samples` = 1 by design — the tool path spends exactly one call. Because
-// there is no averaging to lean on, the CONTEXT must carry the signal: `state` is the full
-// normalised question and each question names the clause under judgement, so Jev reads every
-// family against the whole question (a clause like "an SLA" is judged knowing the case-type clause
-// beside it) instead of against a bare fragment. Returns Map<goal, routing>.
-export async function routeClauses(clauses, { question = null, floor = ROUTE.floor, margin = ROUTE.margin, cap = ROUTE.cap, tie = ROUTE.tie, band = ROUTE.band, jevFn = jev } = {}) {
-  const goals = (Array.isArray(clauses) ? clauses : [clauses]).map((c) => String(c ?? ""));
-  const out = new Map();
-  if (!goals.length) return out; // no goal → no call (Jev rejects an empty question set with a 422)
-  const cands = await deriveCandidates();
-  const questions = {};
-  goals.forEach((goal, i) => cands.forEach((c, j) => {
-    questions[`cl${i}_fam${j}`] = { type: "noul", instructions: `Considering the whole question (in the state), does it require authoring: ${c.desc}? The part under judgement is: "${goal}".` };
-  }));
-  // the WHOLE question as state: the clauses together are the context the single reading lacks.
-  const whole = question ? String(question) : goals.join("; ");
-  const r = await jevFn({ state: `Build question: "${whole}"`, questions });
-  goals.forEach((goal, i) => {
-    const scoreOf = (j) => r.answers?.[`cl${i}_fam${j}`]?.noul ?? 0;
-    out.set(goal, rankFamilies(cands, scoreOf, { floor, margin, cap, tie, band }));
-  });
-  return out;
-}
-
-// The RANKING half of routing: a family→score map in, a recall-oriented shortlist out. Pure, and
-// shared by routeSkills (one goal, averaged samples) and routeClauses (many goals, one batched call)
-// so both paths apply the SAME cutoff/band/primary rules.
-function rankFamilies(cands, scoreOf, { floor, margin, cap, tie, band }) {
-  const indexOf = new Map(cands.map((c, i) => [c.f, i])); // corpus order: a deterministic tie-break
-  const isRule = (f) => f.startsWith("rules-rule-");
-  const ranked = cands
-    .map((c, i) => ({ f: c.f, p: scoreOf(i) }))
-    .sort((a, b) => b.p - a.p || indexOf.get(a.f) - indexOf.get(b.f));
-  // anchor on the best AUTHORABLE rule family (fall back to the overall top only if none)
-  const topRule = ranked.find(x => isRule(x.f)) || ranked[0];
-  const top = topRule?.p ?? 0;
-  const cutoff = Math.max(floor, top - margin);
-  // A family sitting ON the cutoff flips membership between calls: its own score AND the anchor
-  // both jitter by ~`band`, so the comparison is a coin-flip. Two rules keep the shortlist honest
-  // AND stable:
-  //   - the best-companion families (rank 1-2) and graph-related families get a `band` of leniency
-  //     around the cutoff, so a genuinely-required companion is never dropped by jitter;
-  //   - a THIRD-or-later family that merely scrapes past the cutoff is the noise that makes sets
-  //     flap (e.g. a "dataset" rule matching a "data model" goal), so it must clear the cutoff by
-  //     `band` — a decisive margin — to be kept.
-  const ruleRank = new Map();
-  { let rr = 0; for (const x of ranked) if (isRule(x.f)) ruleRank.set(x.f, ++rr); }
-  const related = topRule ? relatedTo(topRule.f) : new Set();
-  const lenient = (f) => (ruleRank.get(f) ?? 99) <= 2 || related.has(f);
-  const flagged = ranked
-    .filter(x => x.f === topRule?.f || x.p >= cutoff + band || (x.p >= cutoff - band && lenient(x.f)))
-    .slice(0, cap);
-  // never return an EMPTY rule shortlist when the model has any signal: if methodology docs
-  // starved the cut (a low-confidence route), keep every rule family statistically tied with
-  // the best one (`tie`). Precision is enforced downstream, so recall-safe beats "(none)".
-  if (!flagged.some(x => isRule(x.f)) && topRule) {
-    for (const x of ranked) if (isRule(x.f) && x.p >= top - tie && !flagged.includes(x)) flagged.push(x);
-  }
-  if (!flagged.length && ranked.length) flagged.push(ranked[0]);
-  // primary = the best AUTHORABLE family. Two rule families within `tie` are a statistical tie
-  // (Jev's noul jitter is ~±0.02); break it by corpus order so identical goals don't flip.
-  const ruleEntries = flagged.filter(x => isRule(x.f));
-  let primaryEntry;
-  if (ruleEntries.length) {
-    const bestRule = Math.max(...ruleEntries.map(x => x.p));
-    primaryEntry = ruleEntries
-      .filter(x => x.p >= bestRule - tie)
-      .sort((a, b) => indexOf.get(a.f) - indexOf.get(b.f))[0];
-  } else primaryEntry = flagged[0];
-  const unique = [...new Set([primaryEntry?.f, ...flagged.map(x => x.f)].filter(Boolean))];
-  // the routing EVIDENCE the verdict layer reads (family, score, margin to the cutoff, whether it
-  // cleared) — computed once, here, so no caller ever re-routes (the scores wobble ±0.02).
-  const routed = [...flagged]
-    .sort((a, b) => b.p - a.p)
-    .map((x) => ({
-      family: x.f,
-      score: Number(x.p.toFixed(3)),
-      margin: Number((x.p - cutoff).toFixed(3)),
-      // families the router keeps BELOW the cutoff (band leniency) are candidates, not hits
-      cleared: x.p >= cutoff,
-    }));
-  // `cutoff` is returned WITH the shortlist: the verdict layer needs the margin (score - cutoff) of
-  // each routed family to tell "confidently required" from "sitting on the line", and it must read
-  // it from THIS call — re-routing would answer a different question (the scores wobble ±0.02).
-  return { flagged, ranked, routed, primary: primaryEntry?.f || null, unique, cutoff, floor, candidateCount: cands.length };
+// Route ONE goal through the taxonomy (one judgment call). Kept for callers that have a single goal
+// and no classification of their own; the shipped tool path classifies every clause in one call and
+// passes the result in, so it spends exactly one call for the whole question.
+export async function routeGoal(query, { jevFn = jev } = {}) {
+  const [classification] = await classifyClauses([query], { question: query, jevFn });
+  return routingFrom(classification);
 }
 
 // ---- 7. goal -> values: role classification + deterministic text composition ----
@@ -1253,14 +1114,14 @@ export async function planPegaBuild(opts = {}) {
   const matched = matchContract(query, contracts);
   const baseUrl = matched?.baseUrl || null;
 
-  // A) route over ALL authoring families in the Index (corpus-derived, not a curated subset).
-  // `routing` may be supplied by the caller: change-lib routes EVERY clause of a question in ONE
-  // batched call (routeClauses) and passes each goal's slice in — so the tool path spends exactly
-  // one judgment call and this function makes none when it is handed a routing result.
+  // A) the taxonomy classification for this goal. `routing` may be supplied by the caller:
+  // change-lib classifies EVERY clause of a question in ONE call and passes each clause's family in,
+  // so the shipped tool path spends exactly one judgment call and this function makes none when it is
+  // handed a classification. Standalone callers get the same answer through the same composer.
   const started = Date.now();
   let routingMs = 0;
   let route = routing;
-  if (!route) { const t = Date.now(); route = await routeSkills(query, { jevFn }); routingMs = Date.now() - t; }
+  if (!route) { const t = Date.now(); route = await routeGoal(query, { jevFn }); routingMs = Date.now() - t; }
   const { flagged, primary: primarySkill, unique, cutoff, routed: routeEvidence, floor: routeFloor } = route;
   // reading order (graph REQUIRES, ORDERING ONLY): a related family reads before its dependent.
   // Prerequisites are NOT taken from the graph — they are the structural table (prereq-lib.mjs).
@@ -1357,24 +1218,14 @@ export async function planPegaBuild(opts = {}) {
 
   // No planId, no outPath, no artifact, no store: the result IS the answer. Anything a caller
   // wants to keep, the caller writes — the planner cannot (spec §Removals).
-  // ROUTING EVIDENCE (not just the shortlist): every family the router FLAGGED, with its score and
-  // its margin to the cutoff. The margin can be NEGATIVE — the recall-oriented `band` lets a family
-  // through just below the cutoff, and the verdict layer must see that "it is on the line" rather
-  // than being told it routed. WHICH of these count as evidence is the decision layer's call
-  // (change-lib's evidence rule), never a second routing pass: these numbers come from THIS call.
+  // ROUTING EVIDENCE: the family the taxonomy chose, with the probability it was chosen at. There is
+  // no cutoff any more — a Choice returns a distribution, and the ambiguity metric (`separation`) is
+  // the verdict layer's to read from the SAME classification, never a second routing pass.
   const routingEvidence = {
     routed: routeEvidence || [...flagged]
       .sort((a, b) => b.p - a.p)
-      .map((x) => ({
-        family: x.f,
-        score: Number(x.p.toFixed(3)),
-        margin: Number((x.p - cutoff).toFixed(3)),
-        // families the router would keep BELOW the cutoff (band leniency) are candidates, not hits
-        cleared: x.p >= cutoff,
-      })),
-    cutoff: Number(cutoff.toFixed(3)),
-    // the absolute routing floor this shortlist was ranked against: the verdict layer reads it to
-    // tell a real candidate (at/above the floor) from a sub-floor family jittering below it (R18).
+      .map((x) => ({ family: String(x.f).replace(/^rules-rule-/, ""), score: Number(Number(x.p).toFixed(3)), margin: null, cleared: true })),
+    cutoff: Number.isFinite(cutoff) ? Number(cutoff.toFixed(3)) : null,
     floor: Number.isFinite(routeFloor) ? routeFloor : null,
   };
   const elapsed = Date.now() - started;
