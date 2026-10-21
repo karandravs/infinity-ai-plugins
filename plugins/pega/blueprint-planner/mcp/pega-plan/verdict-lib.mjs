@@ -11,9 +11,10 @@
 // distribution per level, its own `confidence`, and — for the "is this even a Pega authoring goal?"
 // question — a companion Noul. The verdict reads those numbers and nothing else:
 //   * `conceptConfidence` is the model's own confidence in the KIND of work (level 1);
-//   * `separation = p1 / p2` over the family distribution is the documented ambiguity metric
-//     (docs.typesafe.ai/cookbooks/hierarchical_classification: "near 1× is ambiguous, a large ratio
-//     means clear separation");
+//   * `separation` is the documented ambiguity metric (docs.typesafe.ai/cookbooks/
+//     hierarchical_classification: "near 1× is ambiguous, a large ratio means clear separation"),
+//     read between the top family and the best family it is NOT structurally related to — a family
+//     and its structural relatives are one answer, not two candidates (see taxonomy-lib);
 //   * `any` is the Noul that pairs with the unreliable `none_of_these` option
 //     (docs.typesafe.ai/primitives/choice: "a `none of the above` option may not work well … ask a
 //     companion Noul and read the Choice only when the Noul says yes").
@@ -26,17 +27,23 @@
 //   3. conceptConfidence < 0.5 — the KIND of work is unclear                → unsure
 //        `closest` reports the PARENT: "this is a `<concept>` question (p=…); name which part",
 //        listing that concept's families. A `none_of_these` winner says so instead.
-//   4. family separation < 1.2 — two families are a coin flip              → unsure
-//        `closest` names the top 2–3 families with their probabilities.
-//   5. the `security` concept (access / SSO) — a supported surface this
-//      corpus authors no rule for, so the registry says what to do instead → alternative
+//   4. the concept resolves through the registry to a capability this corpus
+//      authors NO rule for (access / SSO today)                            → alternative
+//        The family distribution is NOISE here: there is no authoring family to choose between, so
+//        a coin-flip separation says nothing. This is checked BEFORE 5 for exactly that reason.
+//   5. family separation < 1.2 — the top family and the best UNRELATED
+//      family are a coin flip                                              → unsure
+//        `closest` names the top 2–3 families with their probabilities. A structurally related
+//        runner-up is a CHAIN, not a tie, and taxonomy-lib has already excluded it from the metric.
 //   6. otherwise — a confident concept and a clearly separated family      → yes
 //        the chosen family is the answer.
 //
 // WHAT IS *NOT* A VERDICT INPUT ANY MORE: routing scores, cutoffs, margins, bands, ties, whether the
-// clause spells the family's name, whether two families are structural complements, and whether a
-// score sits under a floor. The structural prerequisite table (prereq-lib.mjs) still decides the
-// ORDER of the steps and what must exist first — it no longer decides the verdict.
+// clause spells the family's name, and whether a score sits under a floor. The structural prerequisite
+// table (prereq-lib.mjs) does not score anything either — but it does say what ONE answer looks like:
+// a family and its structural relatives (a data page and the connector it needs) are a CHAIN, so the
+// ambiguity metric never compares them (taxonomy-lib computes `separation` that way). The table still
+// decides the ORDER of the steps and what must exist first.
 //
 // MERGE — the overall verdict is the WORST clause (`no` > `unsure` > `alternative` > `yes`), with one
 // exception: a `no` clause beside an answerable clause cannot make the whole question impossible —
@@ -199,6 +206,23 @@ function candidatesText(probabilities, n = 3) {
     .join(", ");
 }
 
+// A CONCEPT the registry maps to a capability this corpus authors NO rule for. `security` is the one
+// such concept today (access groups, roles, SSO are configuration surfaces, not rules), and the
+// registry says what to do instead. The map is the concept→capability default; a clause that NAMES a
+// capability resolves to that entry instead (an SSO clause is an authentication service, not an
+// access group).
+const CONCEPT_CAPABILITY = { security: "access" };
+
+// The registry entry a clause resolves to, ONLY when it is NON-AUTHORABLE — i.e. it names no family
+// this corpus can compose (`families[]` empty or absent). An entry WITH families has an authorable
+// part, so the family distribution is meaningful for it and this must not short-circuit the verdict.
+function nonAuthorableEntry(clause, concept, registry) {
+  const entry = entryFor(clause?.capability, registry) || entryFor(CONCEPT_CAPABILITY[str(concept)], registry);
+  if (!entry) return null;
+  const families = Array.isArray(entry.families) ? entry.families : [];
+  return families.length ? null : entry;
+}
+
 // ---- per-clause decision: the precedence table above, in code ----
 function decideClause(clause, registry) {
   const text = str(clause?.text);
@@ -246,22 +270,24 @@ function decideClause(clause, registry) {
         why: `the kind of work is not settled (concept confidence ${conceptConfidence.toFixed(2)} < ${CONCEPT_FLOOR}), so the family below it cannot be trusted` } };
   }
 
-  // 4. two families are a coin flip: the verdict would flip with the distribution.
+  // 4. the concept resolves through the registry to a non-authorable capability (access / SSO). The
+  //    corpus authors no rule for it, so there is no authoring family to choose between and the
+  //    distribution below is noise — a coin-flip separation here is not evidence of anything. The
+  //    registry says what to do instead: a downgrade, never a `no`, and never a family guess.
+  const registryEntry = nonAuthorableEntry(clause, c.concept, registry);
+  if (registryEntry) {
+    return { ...base, verdict: "alternative", signal: "registry",
+      closest: registryClosest(registryEntry),
+      partial: { planable: 0, manual: 1, missing: 0 } };
+  }
+
+  // 5. the top family and the best UNRELATED family are a coin flip: the verdict would flip with the
+  //    distribution. (`separation` already ignores structurally related families — a data page and
+  //    the connector it needs are one answer, not two candidates; taxonomy-lib computes it.)
   if (separation < SEPARATION_FLOOR) {
     return { ...base, verdict: "unsure", signal: "family-ambiguous",
       closest: { what: `a clearer statement of the goal — this clause could be ${candidatesText(c.familyProbs, 3)}; name which one it needs`,
-        why: `the top two families are not separated (top/second = ${separation.toFixed(2)} < ${SEPARATION_FLOOR}), so which one is the answer is a coin flip` } };
-  }
-
-  // 5. the security concept: access and SSO are supported Infinity surfaces that this corpus authors
-  //    no rule for. The registry says what to do instead — a downgrade, never a `no`.
-  if (c.concept === "security") {
-    const entry = entryFor(clause?.capability, registry) || entryFor("access", registry);
-    if (entry) {
-      return { ...base, verdict: "alternative", signal: "registry",
-        closest: registryClosest(entry),
-        partial: { planable: 0, manual: 1, missing: 0 } };
-    }
+        why: `the top family and the best unrelated family are not separated (${separation.toFixed(2)}× < ${SEPARATION_FLOOR}×), so which one is the answer is a coin flip` } };
   }
 
   // 6. a confident concept and a clearly separated family: the family is the answer.

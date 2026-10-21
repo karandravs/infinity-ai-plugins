@@ -4,6 +4,30 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
 
 ## [Unreleased]
 
+### Fixed — the registry outranks the family noise, and a structural chain is not a tie
+- **The capability registry is checked BEFORE the family separation.** A clause like *"How do I stop
+  the wrong people from seeing a case?"* is certain at the concept level (`security` 1.00), but its
+  family `Choice` is forced over 37 families that contain **no access rule**, so the distribution is
+  noise (`obj-class` 0.41 vs `obj-casetype` 0.32 → 1.0–1.5× across runs) and the class flipped
+  `alternative` ↔ `unsure`. A concept the registry maps to a **non-authorable capability** (an entry
+  with no `families[]` — access groups/roles and SSO today) now resolves to `alternative` **before**
+  the separation is read: there is no authoring family to choose between, so the distribution is not
+  evidence. Measured: that question is `alternative` on **5/5** runs, each naming the registry path.
+- **Structurally related families are a CHAIN, not a tie.** *"How do I pull policy details from our
+  CRM system?"* lands on `declare-pages` with `connect-rest` beside it (1.0–1.3× separation), but
+  `declare-pages` **requires** `connect-rest` (`STRUCTURAL_PREREQS`) — the data page uses the
+  connector, and the planner already emits the connector as a prerequisite step. `separation` is now
+  computed between the top family and the best family **outside** `structuralClosure(top)` (the table
+  read both ways: what it needs and what needs it), and a distribution that is one chain has nothing
+  to compare against (∞, decisive). Two **unrelated** families at the same probability are still a
+  genuine tie and still answer `unsure` naming both. Measured: that question is `yes` on **5/5**
+  runs, with steps `connect-rest` (prerequisite) then `declare-pages`.
+- `structuralClosure` returns to `prereq-lib.mjs` (pure, no imports) as the taxonomy's structural
+  fact — the prerequisite table still orders the steps; it now also tells the ambiguity metric which
+  families are one answer.
+- **Docs regenerated**: `docs/demo-transcript.md`, `docs/head-to-head.md`, `docs/mcp-proof.md`; the
+  SKILL text and the tool description say what `separation` now measures.
+
 ### Changed — the routing + verdict layer is a TAXONOMY, not a set of thresholds
 - **Routing is one `Choice` per taxonomy level** (`mcp/pega-plan/taxonomy-lib.mjs`, new): the corpus's
   own two-level taxonomy — **14 concepts** (the skills-graph's concept tags) and **37 rule families**

@@ -34,14 +34,19 @@ don't write files or shell.
    - **`yes`** — every clause maps to authorable rule families. Build the steps.
    - **`alternative`** — part of it is authorable, or there is a supported Pega surface this tool
      does not author. Build the steps; the rest is in `closest` (and `partial`) — a human/config step.
+     A clause whose concept resolves through the capability registry to something this corpus authors
+     NO rule for (access groups / roles, SSO) is `alternative` whatever its family distribution says:
+     there is no authoring family to choose between, so the distribution is noise, not evidence.
    - **`no`** — the clause asks for something no Pega rule type authors (the companion Noul `any` is
      below 0.35). **Do not build it.** `closest` names the concept it came closest to and why it is
      absent — it is a diagnosis, not a recipe. Route it to a human.
    - **`unsure`** — the classification is not confident enough to name a rule. Three documented
      reasons, each naming what would resolve it: the kind of work is unclear (`conceptConfidence`
      < 0.5 — `closest` reports the PARENT: "this is a `<concept>` question (p=…); name which part",
-     listing that concept's families), the family is a coin flip (`separation` = top ÷ second < 1.2 —
-     `closest` names the top 2–3 families with their probabilities), or the judgment service is down.
+     listing that concept's families), the family is a coin flip (`separation` < 1.2 — the top family
+     against the best family it is NOT structurally related to, because a family and its structural
+     relatives are one answer, not two candidates; `closest` names the top 2–3 families with their
+     probabilities), or the judgment service is down.
      **Do not build that clause and do not call it impossible.** The overall verdict is the WORST
      clause, so a question can be `unsure` while other clauses are `yes`/`alternative`: build **the
      steps of the `yes`/`alternative` clauses** (their numbers are in `clauses[].steps`) and stop at

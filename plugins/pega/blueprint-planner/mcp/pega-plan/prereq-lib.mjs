@@ -14,10 +14,12 @@
 // that needs second-order prerequisites must re-resolve over the returned `steps` itself — this
 // module never walks the chain, so an answer stays auditable and a cycle cannot loop.
 //
-// THIS TABLE NO LONGER DECIDES ANY VERDICT. It used to break routing near-ties by calling two
-// families "complements" rather than competitors; the verdict is now read from the taxonomy
-// distribution (verdict-lib.mjs), so the table's only job is the one it is qualified for: the ORDER
-// of the steps and what the caller must supply before building.
+// THIS TABLE NO LONGER DECIDES A VERDICT ON ITS OWN — but it does say what ONE ANSWER looks like.
+// It used to break routing near-ties by calling two families "complements" rather than competitors;
+// the verdict is now read from the taxonomy distribution (verdict-lib.mjs). What survives is the
+// structural FACT the taxonomy needs: a family and its structural relatives are a CHAIN (a data page
+// and the connector it needs are authored together), so the ambiguity metric must not compare them.
+// `structuralClosure` below is that fact, read both ways.
 //
 // Pure: no imports, no corpus read, no graph load. The table is the whole declaration; a family
 // without an entry needs nothing (never invent edges to look helpful).
@@ -86,4 +88,23 @@ export function resolvePrereqs(families) {
     steps: [...steps].sort(),
     inputs: [...inputs].map(([name, why]) => ({ name, why })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
   };
+}
+
+// The same table read BOTH ways: what a family NEEDS and what NEEDS it, plus the family itself. A
+// family and anything in its closure are ONE answer — authoring the data page means authoring (or
+// reusing) the connector it names — so they are a chain, never competing candidates. Deterministic
+// (sorted) and one level deep, exactly like the table: no transitive walk, no invented edge.
+export function structuralClosure(family) {
+  const self = bareName(family);
+  if (!self) return new Set();
+  const out = new Set([self]);
+  for (const need of STRUCTURAL_PREREQS[self]?.needs || []) {
+    const p = bareName(need);
+    if (p && p !== self) out.add(p);
+  }
+  for (const [fam, entry] of Object.entries(STRUCTURAL_PREREQS)) {
+    if (fam === self) continue;
+    if ((entry.needs || []).some((n) => bareName(n) === self)) out.add(fam);
+  }
+  return new Set([...out].sort());
 }

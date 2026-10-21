@@ -14,7 +14,9 @@
 //
 // THE PATTERNS THIS FOLLOWS (all from docs.typesafe.ai):
 //   * hierarchical_classification — classify level by level; `separation = top / second` is the
-//     ambiguity metric (near 1× means ambiguous, a large ratio means clear separation).
+//     ambiguity metric (near 1× means ambiguous, a large ratio means clear separation). HERE the
+//     "second" is the best family that is NOT structurally related to the top one (structuralSeparation
+//     below): a data page and the connector it requires are one answer, so they are a chain, not a tie.
 //   * choice — the answer is `choice` + `confidence` + `probabilities`; a `none of the above` option
 //     is unreliable, so it is paired with a companion NOUL (`any_<i>`) that asks whether ANY listed
 //     family builds what the clause asks for. Code reads the Choice only when that Noul says yes.
@@ -32,6 +34,7 @@ import path from "node:path";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { familyProfile } from "./graph-lib.mjs";
 import { jev } from "./jev-client.mjs";
+import { structuralClosure } from "./prereq-lib.mjs";
 
 // ---- level 1: the 14 concepts --------------------------------------------------------------
 // One line each, kept deliberately DISTINCT: the descriptions are the only thing separating the
@@ -228,6 +231,25 @@ export function separationOf(probabilities) {
   return second > 0 ? values[0] / second : Infinity;
 }
 
+// The ambiguity metric the VERDICT reads: the top family against the best family it is NOT
+// structurally related to. A family and its structural relatives (prereq-lib's table read both ways)
+// are ONE answer — a data page REQUIRES the REST connector it names, and the planner already emits
+// that connector as a prerequisite step — so comparing them would call a chain a coin flip. Two
+// unrelated families at the same probability are still a genuine tie. A distribution that is a single
+// chain has nothing to be ambiguous with, so it is Infinity (decisive), not 1× (a coin flip).
+export function structuralSeparation(probabilities) {
+  const ranked = Object.entries(probabilities || {})
+    .map(([option, p]) => [option, Number(p)])
+    .filter(([, p]) => Number.isFinite(p) && p > 0)
+    // probability descending, then name ascending — never the order the options were sent in
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  if (!ranked.length) return 0;
+  const [top, topP] = ranked[0];
+  const related = structuralClosure(top);
+  const unrelated = ranked.slice(1).find(([option]) => !related.has(option));
+  return unrelated ? topP / unrelated[1] : Infinity;
+}
+
 // The option menu as the API wants it: an OBJECT map of option name → description (the docs' shape).
 function menu(options, describe) {
   const out = {};
@@ -314,7 +336,8 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
       family: chosenFamily?.option || null,
       familyConfidence: Number(familyAnswer.confidence ?? chosenFamily?.probability ?? 0),
       familyProbs,
-      separation: separationOf(familyProbs),
+      // the ambiguity metric, read as a chain rather than a tie (see structuralSeparation)
+      separation: structuralSeparation(familyProbs),
       any,
     };
   });
