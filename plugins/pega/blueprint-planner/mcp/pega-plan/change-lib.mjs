@@ -28,6 +28,7 @@ import { applyPlatformTruths } from "./preflight-lib.mjs";
 import { resolvePrereqs } from "./prereq-lib.mjs";
 import { decide, loadRegistry, describeClosest } from "./verdict-lib.mjs";
 import { classifyClauses, taxonomySummary } from "./taxonomy-lib.mjs";
+import { normaliseHistory, memoryTurn, worthSaving, MEMORY_THRESHOLD } from "./memory-lib.mjs";
 import { splitClauses, normaliseQuestion } from "./question-lib.mjs";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { JEV_MODEL, JevError, JevUnavailable } from "../../lib/jev-lib.mjs";
@@ -344,8 +345,9 @@ const isJevError = (e) =>
 
 // A Jev outage is an ANSWER, not a tool error: the verdict is `unsure` (no evidence either way)
 // and the reason is the first caveat. The contract shape is kept, with no steps — an outage must
-// never look like a plan.
-function outageAnswer(e, timing_ms = null) {
+// never look like a plan. The memory gate never ran, so nothing is worth saving: `worth_saving` is
+// false rather than absent, and `turn` records the unanswered request honestly.
+function outageAnswer(e, timing_ms = null, { question = null, namespace = null } = {}) {
   const why = `judgment service unavailable: ${String(e?.message || e).slice(0, 300)}`;
   return {
     verdict: "unsure",
@@ -356,18 +358,31 @@ function outageAnswer(e, timing_ms = null) {
     steps: [],
     inputs_required: [],
     caveats: [why],
-    looked_at: { clauses: [], taxonomy: taxonomySummary(), evidence_absent: [] },
+    looked_at: {
+      clauses: [], taxonomy: taxonomySummary(), evidence_absent: [],
+      memory: { remember: null, threshold: MEMORY_THRESHOLD, worth_saving: false },
+    },
     provenance: provenanceOf({ timing_ms }),
+    memory: { worth_saving: false, turn: memoryTurn({ question, verdict: "unsure", families: [], namespace }) },
   };
 }
 
 // ---- 8. the answer ----
-// ONE judgment call classifies every clause (taxonomy-lib); everything after it is deterministic:
-// planPegaBuild composes the family each clause was classified into (it makes no routing call of its
-// own when handed the classification), the structural prerequisite walk (prereq-lib) emits the steps
-// in BUILD order, and verdict-lib turns the classification into the verdict.
-export async function planPegaChange({ question, contracts_dir, namespace, planFn = planPegaBuild, jevFn, classifyFn = classifyClauses } = {}) {
+// ONE judgment call classifies every clause (taxonomy-lib) — and carries the memory GATE in the same
+// request, because it ignores the answer. Everything after it is deterministic: planPegaBuild
+// composes the family each clause was classified into (it makes no routing call of its own when
+// handed the classification), the structural prerequisite walk (prereq-lib) emits the steps in BUILD
+// order, and verdict-lib turns the classification into the verdict.
+//
+// MEMORY IS THE CALLER'S. `history` (the caller's saved turns, at most HISTORY_MAX of them) is
+// injected into the classifier's state, and the answer reports `memory` — what the gate thought of
+// THIS question, plus the turn to save. The planner keeps nothing: a caller that wants continuity
+// passes the previous `memory.turn` back in `history`.
+export async function planPegaChange({ question, contracts_dir, namespace, history, planFn = planPegaBuild, jevFn, classifyFn = classifyClauses } = {}) {
   assertQuestion(question);
+  // the caller-owned memory is validated BEFORE any call: a malformed turn is its error, not the
+  // model's, and no judgment call should be spent on a request that cannot be answered honestly.
+  const earlier = normaliseHistory(history);
   const started = Date.now();
 
   const registry = loadRegistry();
@@ -379,13 +394,22 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
   const goals = clauseTexts.map((clause) => goalForClause(clause, verb) || clause);
 
   // A) ONE classification call for the WHOLE question. The clauses together are the state, so a bare
-  // "an SLA" is judged knowing the dispute case beside it.
+  // "an SLA" is judged knowing the dispute case beside it — and the caller's earlier turns ride in
+  // that same state, so a follow-up can resolve against them.
   const planned = [];
   let routingMs = 0;
+  let remember = null;
   try {
     const tClassification = Date.now();
-    const classifications = await classifyFn(clauseTexts, { question: normaliseQuestion(question), ...(jevFn ? { jevFn } : {}) });
+    const classifications = await classifyFn(clauseTexts, {
+      question: normaliseQuestion(question),
+      ...(earlier.length ? { history: earlier } : {}),
+      ...(jevFn ? { jevFn } : {}),
+    });
     routingMs = Date.now() - tClassification;
+    // the gate belongs to the QUESTION, so it is read off the classification set, not per clause. A
+    // caller-supplied classifier that returns no gate leaves it null — nothing is saved by default.
+    remember = (Array.isArray(classifications) ? classifications.remember : classifications?.remember) ?? null;
     for (let i = 0; i < clauseTexts.length; i++) {
       const clause = clauseTexts[i];
       const goal = goals[i];
@@ -399,7 +423,7 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
       planned.push({ clause, goal, plan, classification, capability, stepNumbers: [] });
     }
   } catch (e) {
-    if (isJevError(e)) return outageAnswer(e, { routing: routingMs, compose: Date.now() - started - routingMs, total: Date.now() - started });
+    if (isJevError(e)) return outageAnswer(e, { routing: routingMs, compose: Date.now() - started - routingMs, total: Date.now() - started }, { question, namespace });
     throw e;
   }
 
@@ -576,6 +600,18 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     evidence_absent: decision.evidenceAbsent,
   };
 
+  // G) the memory. The gate already ran, inside the classification call: this is the cookbook's
+  // "save the request plus the answer" step, handed to the caller instead of written down. `turn`
+  // mirrors `as_memory()` — the question, the verdict, the families it chose — so passing it back as
+  // `history` is enough for the next turn to resolve a reference to it.
+  const memory = {
+    worth_saving: worthSaving(remember),
+    turn: memoryTurn({ question, verdict: decision.verdict, families: clauses.map((c) => c.family), namespace }),
+  };
+  // the probability the decision was read from, next to the threshold it was read against, so a
+  // reviewer can audit a saved (or dropped) memory instead of trusting it.
+  lookedAt.memory = { remember, threshold: MEMORY_THRESHOLD, worth_saving: memory.worth_saving };
+
   return {
     verdict: decision.verdict,
     answer: composeAnswer({ verdict: decision.verdict, perClause: clauses, steps, closest: decision.closest, inputs: inputsRequired }),
@@ -587,5 +623,6 @@ export async function planPegaChange({ question, contracts_dir, namespace, planF
     caveats,
     looked_at: lookedAt,
     provenance: provenanceOf({ timing_ms: { routing: routingMs, compose: Date.now() - started - routingMs, total: Date.now() - started } }),
+    memory,
   };
 }

@@ -4,6 +4,32 @@ All notable changes to the **Pega, Automated — the Pega Build Spine** MCP surf
 
 ## [Unreleased]
 
+### Added — basic memory, kept STATELESS (the TypeSafe `basic_memory` cookbook)
+- **The planner remembers nothing; the CALLER owns the memory.** `plan_pega_change` gains
+  `history?: Array<{ question, verdict?, families?, namespace? }>` — earlier turns of the same
+  conversation, the last **5** kept, a malformed entry refused with an error naming the index and
+  field. It is injected into the classifier's `state` as `earlier_turns`, so a follow-up resolves
+  against the prior turn because the `Choice`s READ it, not because code rewrites the clause. Measured:
+  *"Do the same for the claims system."* is `unsure`/`obj-casetype` alone and `yes`/`declare-pages`
+  with the previous turn in `history` (3/3 runs each way).
+- **The gate rides in the SAME judgment call** (`mcp/pega-plan/memory-lib.mjs`, new). The cookbook
+  notes that a gate which ignores the answer can be a second question in the routing request instead
+  of a call of its own — ours counts only what the question says, so it is one extra `Noul`
+  (`remember`) in the existing request. The answer gains
+  `memory: { worth_saving, turn: { question, verdict, families, namespace? } }`, where
+  `worth_saving = P(remember) ≥ 0.5` (a STARTING threshold, to be calibrated against labelled
+  examples) and `turn` is the cookbook's saved memory: the request plus the answer. `looked_at.memory`
+  reports the probability and the threshold, so a saved memory is auditable. Measured: *"Our app
+  namespace is MyOrg-Disputes."* → `worth_saving: true` (P=0.93); *"How do I add a UI view to capture
+  details?"* → `false` (P=0.06).
+- **Still ONE judgment call per question** (the gate is in the same request) and still fast: median
+  **271 ms** over the 20-question set. **No contamination**: all 20 verdicts are unchanged with an
+  unrelated 5-turn history.
+- The MCP schema, the tool description and the `pega-build` skill (**Follow-ups**) document the
+  caller-owned contract: pass the previous turn back, save `memory.turn` when `memory.worth_saving`.
+- Mirrors `pega-automated@9cfe0bd`; `eval/demo-transcript.md`, `eval/head-to-head.md`,
+  `eval/mcp-proof.md` regenerated.
+
 ### Fixed — the registry outranks the family noise, and a structural chain is not a tie
 - **The capability registry is checked BEFORE the family separation.** A clause like *"How do I stop
   the wrong people from seeing a case?"* is certain at the concept level (`security` 1.00), but its

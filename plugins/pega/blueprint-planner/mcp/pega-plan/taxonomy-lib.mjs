@@ -34,6 +34,7 @@ import path from "node:path";
 import { corpusPaths } from "./corpus-lib.mjs";
 import { familyProfile } from "./graph-lib.mjs";
 import { jev } from "./jev-client.mjs";
+import { gateQuestion, normaliseHistory, MEMORY_KEY } from "./memory-lib.mjs";
 import { structuralClosure } from "./prereq-lib.mjs";
 
 // ---- level 1: the 14 concepts --------------------------------------------------------------
@@ -265,11 +266,20 @@ function menu(options, describe) {
 // `state` is the whole normalised question: the clauses together are the context a single reading
 // lacks ("an SLA" beside "a dispute case" is judged knowing the case).
 //
+// MEMORY (cookbook `basic_memory`, see memory-lib.mjs) adds two things to that SAME request:
+//   remember    Noul  — the gate: does THIS question state a lasting fact worth remembering?
+//   state[MEMORY_KEY] — the CALLER's earlier turns, when it passed any. Injecting them is the whole
+//                       wrapper: the questions do not change, the model reads the whole state, and a
+//                       follow-up ("the data page one") resolves because the prior turn is there.
+// The planner keeps no memory of its own; `history` is validated + capped by the caller's module and
+// the gate's probability is returned as `remember` on the result array (it belongs to the QUESTION,
+// not to a clause, so it is not a field of any one entry).
+//
 // Returns one entry per clause: { concept, conceptConfidence, conceptProbs, family, familyProbs,
 // separation, any }. `concept` is null when the model put its probability on `none_of_these`.
-export async function classifyClauses(clauses, { question = null, jevFn = jev, order = {} } = {}) {
+export async function classifyClauses(clauses, { question = null, history = [], jevFn = jev, order = {} } = {}) {
   const list = (Array.isArray(clauses) ? clauses : [clauses]).map((c) => String(c ?? "").trim()).filter(Boolean);
-  if (!list.length) return []; // no clause → no call (Jev rejects an empty question set with a 422)
+  if (!list.length) { const none = []; none.remember = null; return none; } // no clause → no call (Jev rejects an empty question set with a 422)
 
   const { concepts, families } = taxonomy();
   const familyIds = families.map((f) => f.family);
@@ -278,11 +288,19 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
   const conceptDescription = (id) => (id === NONE_OF_THESE ? NONE_DESCRIPTION : CONCEPTS[id]);
 
   const whole = question ? String(question) : list.join("; ");
+  const earlier = normaliseHistory(history);
   // The family menu is in `state` because the companion Noul has no criteria of its own: it can only
   // ask whether the clause names something in the state. The RULE CLASSES (not the full criteria) are
   // enough for that judgment and keep the state small (jev-1.13 degrades on unrelated detail).
+  // With no history the state is EXACTLY what it always was — an existing caller sees no change.
   const state = { question: whole, clauses: list, pega_rule_types: families.map((f) => f.ruleClass) };
+  if (earlier.length) state[MEMORY_KEY] = earlier;
   const questions = {};
+  // A follow-up is resolved by the Choices READING the earlier turns, not by code rewriting the clause
+  // (pointing at the state is context, not an anaphora heuristic).
+  const context = earlier.length
+    ? ` Earlier turns of this conversation are in \`${MEMORY_KEY}\`: when this clause refers back to an earlier turn, resolve what it means from them.`
+    : "";
 
   list.forEach((clause, i) => {
     const conceptOrder = order.concepts ? order.concepts(i, conceptIds) : rotateOptions(conceptIds, rotationOffset(`concept:${clause}`, conceptIds.length));
@@ -292,7 +310,7 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
       type: "choice",
       instructions:
         `The clause under judgement is clauses[${i}]: "${clause}". Which kind of Pega work does THAT clause ask for? ` +
-        `Answer for the clause, using the whole question only as context.`,
+        `Answer for the clause, using the whole question only as context.` + context,
       criteria: menu(conceptOrder, conceptDescription),
     };
     questions[`family_${i}`] = {
@@ -301,7 +319,7 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
         `The clause under judgement is clauses[${i}]: "${clause}". Which ONE rule type would a Pega developer author to deliver that clause? ` +
         `Choose the rule the clause would be CREATED as — the artefact itself, not a step or a reference inside another rule. ` +
         `(A case type for tracking a case; a flow for a process inside it; a view for a screen; a connector for a call to another system; a report definition for a report.) ` +
-        `Use the whole question only as context.`,
+        `Use the whole question only as context.` + context,
       criteria: menu(familyOrder, (id) => familyById.get(id)?.criteria || id),
     };
     questions[`any_${i}`] = {
@@ -311,11 +329,14 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
         `Answer false when the clause asks for something no Pega rule builds (a printer, an email account, a policy).`,
     };
   });
+  // the memory gate: same request, one Noul, judged on the question alone (see memory-lib.mjs)
+  questions.remember = gateQuestion();
 
   const response = await jevFn({ state, questions });
   const answers = response?.answers || {};
+  const remember = typeof answers.remember?.noul === "number" ? answers.remember.noul : null;
 
-  return list.map((clause, i) => {
+  const result = list.map((clause, i) => {
     const intent = answers[`intent_${i}`] || {};
     const conceptProbs = { ...(intent.probabilities || {}) };
     const chosenConcept = argmax(conceptProbs, conceptIds);
@@ -341,6 +362,10 @@ export async function classifyClauses(clauses, { question = null, jevFn = jev, o
       any,
     };
   });
+  // P(remember) belongs to the QUESTION (one gate per request), so it rides on the array, not on an
+  // entry. It is a non-index property: spread/map/JSON of the array are unaffected.
+  result.remember = remember;
+  return result;
 }
 
 // The taxonomy's own summary, for `looked_at` (a reader can see the menu the model chose from).

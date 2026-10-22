@@ -11,7 +11,8 @@ don't write files or shell.
 
 ## Guardrails
 - **The planner never writes.** `plan_pega_change` reads the corpus and the contracts and *returns*
-  the answer — no files, no plan store, no server-side state. Nothing it produces lands on disk.
+  the answer — no files, no plan store, no server-side state, and no memory of its own: earlier turns
+  are the caller's to keep and pass back (see **Follow-ups**). Nothing it produces lands on disk.
 - **You supply the target.** The active Change Request (and the branch it implies) is yours to pick
   in the Authoring MCP. The planner names no branch and no CR — that is deliberate, not an omission.
 - **One question at a time.** One call, one question; several goals in one question still answer as
@@ -78,6 +79,26 @@ don't write files or shell.
    live application). **The authoritative validation of a payload is the Authoring MCP's runtime
    validator**, never this tool. Let the platform be the judge.
 8. **Record & continue.** Per question: what built, what failed and why → next.
+
+## Follow-ups — the caller owns the memory
+`plan_pega_change` is stateless: it stores nothing between calls, so **continuity is your job**, and
+it is one extra field. Pass the previous turn back as `history`:
+
+1. **Pass the previous turn back.** Take `memory.turn` from the last answer and send it as
+   `history: [ … ]` (the planner keeps the **last 5**; a malformed turn is a clear error naming the
+   field, so only send `{ question, verdict?, families?, namespace? }`). `"the data page one"` on its
+   own says nothing; with the previous turn in `history` the classifier's Choices resolve it against
+   that turn — the planner adds no anaphora heuristics of its own.
+2. **Save what the gate tells you to save.** Every answer carries
+   `memory: { worth_saving, turn: { question, verdict, families, namespace? } }`. The gate — a Noul
+   that rides in the SAME judgment call, so it costs no latency — asked whether your question states
+   something that stays true for later, unrelated questions (the application namespace, the system of
+   record, a naming convention). `worth_saving` is that probability at the 0.5 starting threshold.
+   **Save `memory.turn` when `worth_saving` is true**; drop it when false. `looked_at.memory` reports
+   the probability and the threshold, so a saved memory is auditable rather than assumed.
+3. **Keep the list yourself.** A follow-up in the same conversation, a re-plan after a rejection, or
+   a later story in the same application is a `history` entry — not a new session's guess. Trim it
+   yourself if you want a longer memory than five turns; the planner only caps what it injects.
 
 ## Coverage — a `no` is a human step
 There is no `coverage` flag to consult any more: **the verdict is the coverage signal.** `no` means
