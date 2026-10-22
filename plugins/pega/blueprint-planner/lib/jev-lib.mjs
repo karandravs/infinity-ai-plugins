@@ -2,7 +2,7 @@
 // Raw HTTP wrapper: POST https://api.typesafe.ai/v1/systemone.
 // Pinned model, model logged per call, injectable fetch, fail-closed keyword
 // fallback for listing classification (advisory-first: raw nouls are kept).
-export const JEV_MODEL = "jev-1.13.0";
+export const JEV_MODEL = process.env.PEGA_JEV_MODEL || "jev-1.13.0"; // pinned; override for A/B or a deliberate upgrade
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const RETRY = { attempts: 2, backoffMs: 250 }; // one retry on a transient (network / 5xx / 429) failure
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
